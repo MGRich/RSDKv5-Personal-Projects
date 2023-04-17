@@ -84,3 +84,12 @@ private:
 struct ShaderEntry : public ShaderEntryBase {
     GLuint programID;
 };
+
+#if EXTRA_HW_RENDER
+
+struct GFXSurfaceHW {
+    GLuint texture;
+};
+
+
+#endif

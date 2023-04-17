@@ -143,7 +143,7 @@ const RenderVertex rsdkVertexBuffer[24] =
 #include "EGL/EGLRenderDevice.cpp"
 #endif
 
-RenderDevice::WindowInfo RenderDevice::displayInfo;
+RSDK::RenderDevice::WindowInfo RSDK::RenderDevice::displayInfo;
 
 DrawList RSDK::drawGroups[DRAWGROUP_COUNT];
 
@@ -159,7 +159,7 @@ CameraInfo RSDK::cameras[CAMERA_COUNT];
 ScreenInfo *RSDK::currentScreen = NULL;
 
 int32 RSDK::shaderCount = 0;
-ShaderEntry RSDK::shaderList[SHADER_COUNT];
+RSDK::ShaderEntry RSDK::shaderList[SHADER_COUNT];
 
 bool32 RSDK::changedVideoSettings = false;
 VideoSettings RSDK::videoSettings;
@@ -186,6 +186,11 @@ int32 RenderDeviceBase::displayHeight[16];
 int32 RenderDeviceBase::displayCount = 0;
 
 int32 RenderDeviceBase::lastShaderID = -1;
+
+#if EXTRA_HW_RENDER
+RenderState RSDK::currentState[SCREEN_COUNT];
+RenderStateQueue RSDK::renderStates[SCREEN_COUNT];
+#endif
 
 char RSDK::drawGroupNames[0x10][0x10] = {
     "Draw Group 0", "Draw Group 1", "Draw Group 2",  "Draw Group 3",  "Draw Group 4",  "Draw Group 5",  "Draw Group 6",  "Draw Group 7",
@@ -238,7 +243,7 @@ void RSDK::RenderDeviceBase::ProcessDimming()
     // this is because dimLimit hasn't been initialized yet, so it starts at 0. Likewise, the timer also starts at 0
     // this leads the game to immediately begin dimming when it shouldn't be
     // Fix:
-    // initialize dimLimit before ProcessStage(), maybe in RenderDevice::SetupRendering() or something
+    // initialize dimLimit before ProcessStage(), maybe in RSDK::RenderDevice::SetupRendering() or something
 
     if (videoSettings.dimTimer < videoSettings.dimLimit) {
         if (videoSettings.dimPercent < 1.0f) {
@@ -286,7 +291,7 @@ void RSDK::InitSystemSurfaces()
     gfxSurface[0].lineSize = 4; // 16px
     gfxSurface[0].pixels   = tilesetPixels;
 
-#if RETRO_REV02
+#if RETRO_REV02 || EXTRA_HW_RENDER
     GEN_HASH_MD5("EngineText", gfxSurface[1].hash);
     gfxSurface[1].scope    = SCOPE_GLOBAL;
     gfxSurface[1].width    = 8;
@@ -296,7 +301,7 @@ void RSDK::InitSystemSurfaces()
 #endif
 }
 
-void RSDK::UpdateGameWindow() { RenderDevice::RefreshWindow(); }
+void RSDK::UpdateGameWindow() { RSDK::RenderDevice::RefreshWindow(); }
 
 void RSDK::GetDisplayInfo(int32 *displayID, int32 *width, int32 *height, int32 *refreshRate, char *text)
 {
@@ -308,16 +313,16 @@ void RSDK::GetDisplayInfo(int32 *displayID, int32 *width, int32 *height, int32 *
 
     if (*displayID == -2) { // -2 == "get FS size display"
         if (videoSettings.fsWidth && videoSettings.fsHeight) {
-            for (display = 0; display < RenderDevice::displayCount; ++display) {
+            for (display = 0; display < RSDK::RenderDevice::displayCount; ++display) {
 #if RETRO_RENDERDEVICE_DIRECTX11
-                int32 refresh = RenderDevice::displayInfo.displays[display].refresh_rate.Numerator
-                                / RenderDevice::displayInfo.displays[display].refresh_rate.Denominator;
+                int32 refresh = RSDK::RenderDevice::displayInfo.displays[display].refresh_rate.Numerator
+                                / RSDK::RenderDevice::displayInfo.displays[display].refresh_rate.Denominator;
 #else
-                int32 refresh = RenderDevice::displayInfo.displays[display].refresh_rate;
+                int32 refresh = RSDK::RenderDevice::displayInfo.displays[display].refresh_rate;
 #endif
 
-                if (RenderDevice::displayInfo.displays[display].width == videoSettings.fsWidth
-                    && RenderDevice::displayInfo.displays[display].height == videoSettings.fsHeight && refresh == videoSettings.refreshRate) {
+                if (RSDK::RenderDevice::displayInfo.displays[display].width == videoSettings.fsWidth
+                    && RSDK::RenderDevice::displayInfo.displays[display].height == videoSettings.fsHeight && refresh == videoSettings.refreshRate) {
                     break;
                 }
             }
@@ -328,8 +333,8 @@ void RSDK::GetDisplayInfo(int32 *displayID, int32 *width, int32 *height, int32 *
     else {
         display = *displayID;
         if (prevDisplay < 0)
-            display = RenderDevice::displayCount;
-        else if (prevDisplay > RenderDevice::displayCount)
+            display = RSDK::RenderDevice::displayCount;
+        else if (prevDisplay > RSDK::RenderDevice::displayCount)
             display = 0;
     }
 
@@ -338,13 +343,14 @@ void RSDK::GetDisplayInfo(int32 *displayID, int32 *width, int32 *height, int32 *
         int32 d = display - 1;
 
 #if RETRO_RENDERDEVICE_DIRECTX11
-        int32 refresh = RenderDevice::displayInfo.displays[d].refresh_rate.Numerator / RenderDevice::displayInfo.displays[d].refresh_rate.Denominator;
+        int32 refresh =
+            RSDK::RenderDevice::displayInfo.displays[d].refresh_rate.Numerator / RSDK::RenderDevice::displayInfo.displays[d].refresh_rate.Denominator;
 #else
-        int32 refresh = RenderDevice::displayInfo.displays[d].refresh_rate;
+        int32 refresh = RSDK::RenderDevice::displayInfo.displays[d].refresh_rate;
 #endif
 
-        int32 displayWidth   = RenderDevice::displayInfo.displays[d].width;
-        int32 displayHeight  = RenderDevice::displayInfo.displays[d].height;
+        int32 displayWidth   = RSDK::RenderDevice::displayInfo.displays[d].width;
+        int32 displayHeight  = RSDK::RenderDevice::displayInfo.displays[d].height;
         int32 displayRefresh = refresh;
 
         if (width)
@@ -374,7 +380,7 @@ void RSDK::GetDisplayInfo(int32 *displayID, int32 *width, int32 *height, int32 *
     }
 }
 
-void RSDK::GetWindowSize(int32 *width, int32 *height) { RenderDevice::GetWindowSize(width, height); }
+void RSDK::GetWindowSize(int32 *width, int32 *height) { RSDK::RenderDevice::GetWindowSize(width, height); }
 
 void RSDK::SetScreenSize(uint8 screenID, uint16 width, uint16 height)
 {
@@ -583,6 +589,7 @@ void RSDK::SwapDrawListEntries(uint8 drawGroup, uint16 slot1, uint16 slot2, uint
     }
 }
 
+#if !EXTRA_HW_RENDER
 void RSDK::FillScreen(uint32 color, int32 alphaR, int32 alphaG, int32 alphaB)
 {
     alphaR = CLAMP(alphaR, 0x00, 0xFF);
@@ -611,6 +618,7 @@ void RSDK::FillScreen(uint32 color, int32 alphaR, int32 alphaG, int32 alphaB)
         }
     }
 }
+#endif
 
 void RSDK::DrawLine(int32 x1, int32 y1, int32 x2, int32 y2, uint32 color, int32 alpha, int32 inkEffect, bool32 screenRelative)
 {
@@ -1192,10 +1200,36 @@ void RSDK::DrawRectangle(int32 x, int32 y, int32 width, int32 height, uint32 col
     if (width <= 0 || height <= 0)
         return;
 
-    int32 pitch         = currentScreen->pitch - width;
-    validDraw           = true;
+    validDraw = true;
+
+#if EXTRA_HW_RENDER
+    float hX = x, hY = y, hW = width, hH = height;
+    if (!screenRelative) {
+        hX = FROM_FIXED_F(x) - currentScreen->position.x;
+        hY = FROM_FIXED_F(y) - currentScreen->position.y;
+        hW = FROM_FIXED_F(width);
+        hH = FROM_FIXED_F(height);
+    }
+
+    int32 s            = screens - currentScreen;
+    RenderState *state = currentState + s;
+    state->shader      = (Shader *)new RectShader(rectShader);
+    state->fbShader    = GetFBShader(inkEffect, alpha / 255.f);
+    state->texture     = nullptr;
+
+    state->indexBuffer  = AllocateIndexBuffer(6);
+    state->vertexBuffer = AllocateVertexBuffer(4);
+
+    PlaceQuad(state->vertexBuffer, { hX, hY }, { hX + hW, hY + hH }, { 0.0, 0.0 }, { 1.0, 1.0 }, color);
+
+    state->vertexCount += 4;
+    state->indexCount += 6;
+    AddQuadsToBuffer(state->indexBuffer, 1);
+    PushCurrentState(s);
+#else
+    int32 pitch = currentScreen->pitch - width;
     uint16 *frameBuffer = &currentScreen->frameBuffer[x + (y * currentScreen->pitch)];
-    uint16 color16      = rgb32To16_B[(color >> 0) & 0xFF] | rgb32To16_G[(color >> 8) & 0xFF] | rgb32To16_R[(color >> 16) & 0xFF];
+    uint16 color16 = rgb32To16_B[(color >> 0) & 0xFF] | rgb32To16_G[(color >> 8) & 0xFF] | rgb32To16_R[(color >> 16) & 0xFF];
 
     switch (inkEffect) {
         case INK_NONE: {
@@ -1227,7 +1261,7 @@ void RSDK::DrawRectangle(int32 x, int32 y, int32 width, int32 height, uint32 col
 
         case INK_ALPHA: {
             uint16 *fbufferBlend = &blendLookupTable[0x20 * (0xFF - alpha)];
-            uint16 *pixelBlend   = &blendLookupTable[0x20 * alpha];
+            uint16 *pixelBlend = &blendLookupTable[0x20 * alpha];
 
             int32 h = height;
             while (h--) {
@@ -1243,7 +1277,7 @@ void RSDK::DrawRectangle(int32 x, int32 y, int32 width, int32 height, uint32 col
 
         case INK_ADD: {
             uint16 *blendTablePtr = &blendLookupTable[0x20 * alpha];
-            int32 h               = height;
+            int32 h = height;
             while (h--) {
                 int32 w = width;
                 while (w--) {
@@ -1257,7 +1291,7 @@ void RSDK::DrawRectangle(int32 x, int32 y, int32 width, int32 height, uint32 col
 
         case INK_SUB: {
             uint16 *subBlendTable = &subtractLookupTable[0x20 * alpha];
-            int32 h               = height;
+            int32 h = height;
             while (h--) {
                 int32 w = width;
                 while (w--) {
@@ -1310,6 +1344,7 @@ void RSDK::DrawRectangle(int32 x, int32 y, int32 width, int32 height, uint32 col
             break;
         }
     }
+#endif
 }
 void RSDK::DrawCircle(int32 x, int32 y, int32 radius, uint32 color, int32 alpha, int32 inkEffect, bool32 screenRelative)
 {
@@ -1337,15 +1372,41 @@ void RSDK::DrawCircle(int32 x, int32 y, int32 radius, uint32 color, int32 alpha,
                 break;
         }
 
+#if EXTRA_HW_RENDER
+        float hX = x, hY = y;
+        if (!screenRelative) {
+            hX = FROM_FIXED_F(x) - currentScreen->position.x;
+            hY = FROM_FIXED_F(y) - currentScreen->position.y;
+        }
+        float hL = hX - radius, hR = hX + radius, hT = hY + radius, hB = hY - radius;
+
+        int32 s             = screens - currentScreen;
+        RenderState *state  = currentState + s;
+        auto shader         = new CircleShader(circleShader);
+        shader->innerRadius = 0.f;
+        state->shader       = (Shader *)shader;
+        state->fbShader     = GetFBShader(inkEffect, alpha / 255.f);
+        state->texture      = nullptr;
+
+        state->indexBuffer  = AllocateIndexBuffer(6);
+        state->vertexBuffer = AllocateVertexBuffer(4);
+
+        PlaceQuad(state->vertexBuffer, { hL, hT }, { hR, hB }, { -1.0, -1.0 }, { 1.0, 1.0 }, color);
+
+        state->vertexCount += 4;
+        state->indexCount += 6;
+        AddQuadsToBuffer(state->indexBuffer, 1);
+        PushCurrentState(s);
+#else
         if (!screenRelative) {
             x = FROM_FIXED(x) - currentScreen->position.x;
             y = FROM_FIXED(y) - currentScreen->position.y;
         }
 
         int32 yRadiusBottom = y + radius;
-        int32 bottom        = yRadiusBottom + 1;
-        int32 yRadiusTop    = y - radius;
-        int32 top           = yRadiusTop;
+        int32 bottom = yRadiusBottom + 1;
+        int32 yRadiusTop = y - radius;
+        int32 top = yRadiusTop;
 
         if (top < currentScreen->clipBound_Y1)
             top = currentScreen->clipBound_Y1;
@@ -1360,14 +1421,14 @@ void RSDK::DrawCircle(int32 x, int32 y, int32 radius, uint32 color, int32 alpha,
         if (top != bottom) {
             for (int32 i = top; i < bottom; ++i) {
                 scanEdgeBuffer[i].start = 0x7FFF;
-                scanEdgeBuffer[i].end   = -1;
+                scanEdgeBuffer[i].end = -1;
             }
 
-            int32 r                  = 3 - 2 * radius;
-            int32 xRad               = x - radius;
-            int32 curY               = y;
-            int32 curX               = x;
-            int32 dist               = x - y;
+            int32 r = 3 - 2 * radius;
+            int32 xRad = x - radius;
+            int32 curY = y;
+            int32 curX = x;
+            int32 dist = x - y;
 
             for (int32 i = 0; i <= radius; ++i) {
                 int32 scanX = i + curX;
@@ -1419,14 +1480,14 @@ void RSDK::DrawCircle(int32 x, int32 y, int32 radius, uint32 color, int32 alpha,
 
             // validDraw              = true;
             uint16 *frameBuffer = &currentScreen->frameBuffer[top * currentScreen->pitch];
-            uint16 color16      = rgb32To16_B[(color >> 0) & 0xFF] | rgb32To16_G[(color >> 8) & 0xFF] | rgb32To16_R[(color >> 16) & 0xFF];
+            uint16 color16 = rgb32To16_B[(color >> 0) & 0xFF] | rgb32To16_G[(color >> 8) & 0xFF] | rgb32To16_R[(color >> 16) & 0xFF];
 
             switch (inkEffect) {
                 default: break;
                 case INK_NONE:
                     if (top <= bottom) {
                         ScanEdge *edge = &scanEdgeBuffer[top];
-                        int32 sizeY    = bottom - top;
+                        int32 sizeY = bottom - top;
 
                         for (int32 y = 0; y < sizeY; ++y) {
                             if (edge->start < currentScreen->clipBound_X1)
@@ -1452,7 +1513,7 @@ void RSDK::DrawCircle(int32 x, int32 y, int32 radius, uint32 color, int32 alpha,
                 case INK_BLEND:
                     if (top <= bottom) {
                         ScanEdge *edge = &scanEdgeBuffer[top];
-                        int32 sizeY    = bottom - top;
+                        int32 sizeY = bottom - top;
 
                         for (int32 y = 0; y < sizeY; ++y) {
                             if (edge->start < currentScreen->clipBound_X1)
@@ -1479,10 +1540,10 @@ void RSDK::DrawCircle(int32 x, int32 y, int32 radius, uint32 color, int32 alpha,
                 case INK_ALPHA:
                     if (top <= bottom) {
                         uint16 *fbufferBlend = &blendLookupTable[0x20 * (0xFF - alpha)];
-                        uint16 *pixelBlend   = &blendLookupTable[0x20 * alpha];
+                        uint16 *pixelBlend = &blendLookupTable[0x20 * alpha];
 
                         ScanEdge *edge = &scanEdgeBuffer[top];
-                        int32 sizeY    = bottom - top;
+                        int32 sizeY = bottom - top;
 
                         for (int32 y = 0; y < sizeY; ++y) {
                             if (edge->start < currentScreen->clipBound_X1)
@@ -1509,7 +1570,7 @@ void RSDK::DrawCircle(int32 x, int32 y, int32 radius, uint32 color, int32 alpha,
                     uint16 *blendTablePtr = &blendLookupTable[0x20 * alpha];
                     if (top <= bottom) {
                         ScanEdge *edge = &scanEdgeBuffer[top];
-                        int32 sizeY    = bottom - top;
+                        int32 sizeY = bottom - top;
 
                         for (int32 y = 0; y < sizeY; ++y) {
                             if (edge->start < currentScreen->clipBound_X1)
@@ -1537,7 +1598,7 @@ void RSDK::DrawCircle(int32 x, int32 y, int32 radius, uint32 color, int32 alpha,
                     uint16 *subBlendTable = &subtractLookupTable[0x20 * alpha];
                     if (top <= bottom) {
                         ScanEdge *edge = &scanEdgeBuffer[top];
-                        int32 sizeY    = bottom - top;
+                        int32 sizeY = bottom - top;
 
                         for (int32 y = 0; y < sizeY; ++y) {
                             if (edge->start < currentScreen->clipBound_X1)
@@ -1564,7 +1625,7 @@ void RSDK::DrawCircle(int32 x, int32 y, int32 radius, uint32 color, int32 alpha,
                 case INK_TINT:
                     if (top <= bottom) {
                         ScanEdge *edge = &scanEdgeBuffer[top];
-                        int32 sizeY    = bottom - top;
+                        int32 sizeY = bottom - top;
 
                         for (int32 y = 0; y < sizeY; ++y) {
                             if (edge->start < currentScreen->clipBound_X1)
@@ -1590,7 +1651,7 @@ void RSDK::DrawCircle(int32 x, int32 y, int32 radius, uint32 color, int32 alpha,
                 case INK_MASKED:
                     if (top <= bottom) {
                         ScanEdge *edge = &scanEdgeBuffer[top];
-                        int32 sizeY    = bottom - top;
+                        int32 sizeY = bottom - top;
 
                         for (int32 y = 0; y < sizeY; ++y) {
                             if (edge->start < currentScreen->clipBound_X1)
@@ -1617,7 +1678,7 @@ void RSDK::DrawCircle(int32 x, int32 y, int32 radius, uint32 color, int32 alpha,
                 case INK_UNMASKED:
                     if (top <= bottom) {
                         ScanEdge *edge = &scanEdgeBuffer[top];
-                        int32 sizeY    = bottom - top;
+                        int32 sizeY = bottom - top;
 
                         for (int32 y = 0; y < sizeY; ++y) {
                             if (edge->start < currentScreen->clipBound_X1)
@@ -1642,6 +1703,7 @@ void RSDK::DrawCircle(int32 x, int32 y, int32 radius, uint32 color, int32 alpha,
                     break;
             }
         }
+#endif
     }
 }
 void RSDK::DrawCircleOutline(int32 x, int32 y, int32 innerRadius, int32 outerRadius, uint32 color, int32 alpha, int32 inkEffect,
@@ -1670,15 +1732,41 @@ void RSDK::DrawCircleOutline(int32 x, int32 y, int32 innerRadius, int32 outerRad
             break;
     }
 
+#if EXTRA_HW_RENDER
+    float hX = x, hY = y;
+    if (!screenRelative) {
+        hX = FROM_FIXED_F(x) - currentScreen->position.x;
+        hY = FROM_FIXED_F(y) - currentScreen->position.y;
+    }
+    float hL = hX - outerRadius, hR = hX + outerRadius, hT = hY + outerRadius, hB = hY - outerRadius;
+
+    int32 s             = screens - currentScreen;
+    RenderState *state  = currentState + s;
+    auto shader         = new CircleShader(circleShader);
+    shader->innerRadius = (float)innerRadius / outerRadius;
+    state->shader       = (Shader *)shader;
+    state->fbShader     = GetFBShader(inkEffect, alpha / 255.f);
+    state->texture      = nullptr;
+
+    state->indexBuffer  = AllocateIndexBuffer(6);
+    state->vertexBuffer = AllocateVertexBuffer(4);
+
+    PlaceQuad(state->vertexBuffer, { hL, hT }, { hR, hB }, { -1.0, -1.0 }, { 1.0, 1.0 }, color);
+
+    state->vertexCount += 4;
+    state->indexCount += 6;
+    AddQuadsToBuffer(state->indexBuffer, 1);
+    PushCurrentState(s);
+#else
     if (!screenRelative) {
         x = FROM_FIXED(x) - currentScreen->position.x;
         y = FROM_FIXED(y) - currentScreen->position.y;
     }
 
     if (outerRadius > 0 && innerRadius < outerRadius) {
-        int32 top    = y - outerRadius;
-        int32 left   = x - outerRadius;
-        int32 right  = x + outerRadius;
+        int32 top = y - outerRadius;
+        int32 left = x - outerRadius;
+        int32 right = x + outerRadius;
         int32 bottom = y + outerRadius;
 
         if (left < currentScreen->clipBound_X1)
@@ -1702,12 +1790,12 @@ void RSDK::DrawCircleOutline(int32 x, int32 y, int32 innerRadius, int32 outerRad
             bottom = currentScreen->clipBound_Y2;
 
         if (left != right && top != bottom) {
-            int32 ir2           = innerRadius * innerRadius;
-            int32 or2           = outerRadius * outerRadius;
-            validDraw           = true;
+            int32 ir2 = innerRadius * innerRadius;
+            int32 or2 = outerRadius * outerRadius;
+            validDraw = true;
             uint16 *frameBuffer = &currentScreen->frameBuffer[left + top * currentScreen->pitch];
-            uint16 color16      = rgb32To16_B[(color >> 0) & 0xFF] | rgb32To16_G[(color >> 8) & 0xFF] | rgb32To16_R[(color >> 16) & 0xFF];
-            int32 pitch         = (left + currentScreen->pitch - right);
+            uint16 color16 = rgb32To16_B[(color >> 0) & 0xFF] | rgb32To16_G[(color >> 8) & 0xFF] | rgb32To16_R[(color >> 16) & 0xFF];
+            int32 pitch = (left + currentScreen->pitch - right);
 
             switch (inkEffect) {
                 default: break;
@@ -1764,7 +1852,7 @@ void RSDK::DrawCircleOutline(int32 x, int32 y, int32 innerRadius, int32 outerRad
                 case INK_ALPHA:
                     if (top < bottom) {
                         uint16 *fbufferBlend = &blendLookupTable[0x20 * (0xFF - alpha)];
-                        uint16 *pixelBlend   = &blendLookupTable[0x20 * alpha];
+                        uint16 *pixelBlend = &blendLookupTable[0x20 * alpha];
 
                         int32 distY1 = top - y;
                         int32 distY2 = bottom - top;
@@ -1923,6 +2011,7 @@ void RSDK::DrawCircleOutline(int32 x, int32 y, int32 innerRadius, int32 outerRad
             }
         }
     }
+#endif
 }
 
 void RSDK::DrawFace(Vector2 *vertices, int32 vertCount, int32 r, int32 g, int32 b, int32 alpha, int32 inkEffect)
@@ -1950,7 +2039,37 @@ void RSDK::DrawFace(Vector2 *vertices, int32 vertCount, int32 r, int32 g, int32 
             break;
     }
 
-    int32 top    = 0x7FFFFFFF;
+#if EXTRA_HW_RENDER
+    const int32 ic = 3 * vertCount - 6;
+
+    int32 s            = screens - currentScreen;
+    RenderState *state = currentState + s;
+    state->shader      = (Shader *)new RectShader(rectShader);
+    state->fbShader    = GetFBShader(inkEffect, alpha / 255.f);
+    state->texture     = nullptr;
+
+    state->indexBuffer  = AllocateIndexBuffer(ic);
+    state->vertexBuffer = AllocateVertexBuffer(vertCount);
+
+    for (int32 v = 0; v < vertCount; ++v) {
+        state->vertexBuffer[v].pos.x = FROM_FIXED_F(vertices[v].x);
+        state->vertexBuffer[v].pos.y = FROM_FIXED_F(vertices[v].y);
+        state->vertexBuffer[v].pos.z = 0.0;
+        state->vertexBuffer[v].color = (r << 16) | (g << 8) | (b);
+
+        if (v < vertCount - 2) {
+            state->indexBuffer[v * 3 + 0] = v - 1;
+            state->indexBuffer[v * 3 + 1] = v + 1;
+            state->indexBuffer[v * 3 + 2] = v + 2;
+        }
+    }
+    state->indexBuffer[0] = 0;
+
+    state->vertexCount += vertCount;
+    state->indexCount += ic;
+    PushCurrentState(s);
+#else
+    int32 top = 0x7FFFFFFF;
     int32 bottom = -0x10000;
     for (int32 v = 0; v < vertCount; ++v) {
         if (vertices[v].y < top)
@@ -1959,7 +2078,7 @@ void RSDK::DrawFace(Vector2 *vertices, int32 vertCount, int32 r, int32 g, int32 
             bottom = vertices[v].y;
     }
 
-    int32 topScreen    = FROM_FIXED(top);
+    int32 topScreen = FROM_FIXED(top);
     int32 bottomScreen = FROM_FIXED(bottom);
 
     if (topScreen < currentScreen->clipBound_Y1)
@@ -1976,7 +2095,7 @@ void RSDK::DrawFace(Vector2 *vertices, int32 vertCount, int32 r, int32 g, int32 
         ScanEdge *edge = &scanEdgeBuffer[topScreen];
         for (int32 s = topScreen; s <= bottomScreen; ++s) {
             edge->start = 0x7FFF;
-            edge->end   = -1;
+            edge->end = -1;
             ++edge;
         }
 
@@ -1986,7 +2105,7 @@ void RSDK::DrawFace(Vector2 *vertices, int32 vertCount, int32 r, int32 g, int32 
         ProcessScanEdge(vertices[0].x, vertices[0].y, vertices[vertCount - 1].x, vertices[vertCount - 1].y);
 
         uint16 *frameBuffer = &currentScreen->frameBuffer[topScreen * currentScreen->pitch];
-        uint16 color16      = rgb32To16_B[b] | rgb32To16_G[g] | rgb32To16_R[r];
+        uint16 color16 = rgb32To16_B[b] | rgb32To16_G[g] | rgb32To16_R[r];
 
         edge = &scanEdgeBuffer[topScreen];
         switch (inkEffect) {
@@ -2036,7 +2155,7 @@ void RSDK::DrawFace(Vector2 *vertices, int32 vertCount, int32 r, int32 g, int32 
 
             case INK_ALPHA: {
                 uint16 *fbufferBlend = &blendLookupTable[0x20 * (0xFF - alpha)];
-                uint16 *pixelBlend   = &blendLookupTable[0x20 * alpha];
+                uint16 *pixelBlend = &blendLookupTable[0x20 * alpha];
 
                 for (int32 s = topScreen; s <= bottomScreen; ++s) {
                     if (edge->start < currentScreen->clipBound_X1)
@@ -2177,6 +2296,7 @@ void RSDK::DrawFace(Vector2 *vertices, int32 vertCount, int32 r, int32 g, int32 
                 break;
         }
     }
+#endif
 }
 void RSDK::DrawBlendedFace(Vector2 *vertices, uint32 *colors, int32 vertCount, int32 alpha, int32 inkEffect)
 {
@@ -2203,7 +2323,37 @@ void RSDK::DrawBlendedFace(Vector2 *vertices, uint32 *colors, int32 vertCount, i
             break;
     }
 
-    int32 top    = 0x7FFFFFFF;
+#if EXTRA_HW_RENDER
+    const int32 ic = 3 * vertCount - 6;
+
+    int32 s            = screens - currentScreen;
+    RenderState *state = currentState + s;
+    state->shader      = (Shader *)new RectShader(rectShader);
+    state->fbShader    = GetFBShader(inkEffect, alpha / 255.f);
+    state->texture     = nullptr;
+
+    state->indexBuffer  = AllocateIndexBuffer(ic);
+    state->vertexBuffer = AllocateVertexBuffer(vertCount);
+
+    for (int32 v = 0; v < vertCount; ++v) {
+        state->vertexBuffer[v].pos.x = FROM_FIXED_F(vertices[v].x);
+        state->vertexBuffer[v].pos.y = FROM_FIXED_F(vertices[v].y);
+        state->vertexBuffer[v].pos.z = 0.0;
+        state->vertexBuffer[v].color = colors[v];
+
+        if (v < vertCount - 2) {
+            state->indexBuffer[v * 3 + 0] = v - 1;
+            state->indexBuffer[v * 3 + 1] = v + 1;
+            state->indexBuffer[v * 3 + 2] = v + 2;
+        }
+    }
+    state->indexBuffer[0] = 0;
+
+    state->vertexCount += vertCount;
+    state->indexCount += ic;
+    PushCurrentState(s);
+#else
+    int32 top = 0x7FFFFFFF;
     int32 bottom = -0x10000;
     for (int32 v = 0; v < vertCount; ++v) {
         if (vertices[v].y < top)
@@ -2212,7 +2362,7 @@ void RSDK::DrawBlendedFace(Vector2 *vertices, uint32 *colors, int32 vertCount, i
             bottom = vertices[v].y;
     }
 
-    int32 topScreen    = FROM_FIXED(top);
+    int32 topScreen = FROM_FIXED(top);
     int32 bottomScreen = FROM_FIXED(bottom);
 
     if (topScreen < currentScreen->clipBound_Y1)
@@ -2229,7 +2379,7 @@ void RSDK::DrawBlendedFace(Vector2 *vertices, uint32 *colors, int32 vertCount, i
         ScanEdge *edge = &scanEdgeBuffer[topScreen];
         for (int32 s = topScreen; s <= bottomScreen; ++s) {
             edge->start = 0x7FFF;
-            edge->end   = -1;
+            edge->end = -1;
             ++edge;
         }
 
@@ -2245,7 +2395,7 @@ void RSDK::DrawBlendedFace(Vector2 *vertices, uint32 *colors, int32 vertCount, i
             default: break;
             case INK_NONE:
                 for (int32 s = topScreen; s <= bottomScreen; ++s) {
-                    int32 count  = edge->end - edge->start;
+                    int32 count = edge->end - edge->start;
                     int32 deltaR = 0;
                     int32 deltaG = 0;
                     int32 deltaB = 0;
@@ -2272,12 +2422,12 @@ void RSDK::DrawBlendedFace(Vector2 *vertices, uint32 *colors, int32 vertCount, i
 
                     if (edge->end < currentScreen->clipBound_X1) {
                         edge->end = currentScreen->clipBound_X1;
-                        count     = currentScreen->clipBound_X1 - edge->start;
+                        count = currentScreen->clipBound_X1 - edge->start;
                     }
 
                     if (edge->end > currentScreen->clipBound_X2) {
                         edge->end = currentScreen->clipBound_X2;
-                        count     = currentScreen->clipBound_X2 - edge->start;
+                        count = currentScreen->clipBound_X2 - edge->start;
                     }
 
                     for (int32 x = 0; x < count; ++x) {
@@ -2294,8 +2444,8 @@ void RSDK::DrawBlendedFace(Vector2 *vertices, uint32 *colors, int32 vertCount, i
 
             case INK_BLEND:
                 for (int32 s = topScreen; s <= bottomScreen; ++s) {
-                    int32 start  = edge->start;
-                    int32 count  = edge->end - edge->start;
+                    int32 start = edge->start;
+                    int32 count = edge->end - edge->start;
                     int32 deltaR = 0;
                     int32 deltaG = 0;
                     int32 deltaB = 0;
@@ -2326,7 +2476,7 @@ void RSDK::DrawBlendedFace(Vector2 *vertices, uint32 *colors, int32 vertCount, i
 
                     if (edge->end > currentScreen->clipBound_X2) {
                         edge->end = currentScreen->clipBound_X2;
-                        count     = currentScreen->clipBound_X2 - edge->start;
+                        count = currentScreen->clipBound_X2 - edge->start;
                     }
 
                     for (int32 x = 0; x < count; ++x) {
@@ -2345,11 +2495,11 @@ void RSDK::DrawBlendedFace(Vector2 *vertices, uint32 *colors, int32 vertCount, i
 
             case INK_ALPHA: {
                 uint16 *fbufferBlend = &blendLookupTable[0x20 * (0xFF - alpha)];
-                uint16 *pixelBlend   = &blendLookupTable[0x20 * alpha];
+                uint16 *pixelBlend = &blendLookupTable[0x20 * alpha];
 
                 for (int32 s = topScreen; s <= bottomScreen; ++s) {
-                    int32 start  = edge->start;
-                    int32 count  = edge->end - edge->start;
+                    int32 start = edge->start;
+                    int32 count = edge->end - edge->start;
                     int32 deltaR = 0;
                     int32 deltaG = 0;
                     int32 deltaB = 0;
@@ -2380,7 +2530,7 @@ void RSDK::DrawBlendedFace(Vector2 *vertices, uint32 *colors, int32 vertCount, i
 
                     if (edge->end > currentScreen->clipBound_X2) {
                         edge->end = currentScreen->clipBound_X2;
-                        count     = currentScreen->clipBound_X2 - edge->start;
+                        count = currentScreen->clipBound_X2 - edge->start;
                     }
 
                     for (int32 x = 0; x < count; ++x) {
@@ -2401,8 +2551,8 @@ void RSDK::DrawBlendedFace(Vector2 *vertices, uint32 *colors, int32 vertCount, i
                 uint16 *blendTablePtr = &blendLookupTable[0x20 * alpha];
 
                 for (int32 s = topScreen; s <= bottomScreen; ++s) {
-                    int32 start  = edge->start;
-                    int32 count  = edge->end - edge->start;
+                    int32 start = edge->start;
+                    int32 count = edge->end - edge->start;
                     int32 deltaR = 0;
                     int32 deltaG = 0;
                     int32 deltaB = 0;
@@ -2433,7 +2583,7 @@ void RSDK::DrawBlendedFace(Vector2 *vertices, uint32 *colors, int32 vertCount, i
 
                     if (edge->end > currentScreen->clipBound_X2) {
                         edge->end = currentScreen->clipBound_X2;
-                        count     = currentScreen->clipBound_X2 - edge->start;
+                        count = currentScreen->clipBound_X2 - edge->start;
                     }
 
                     for (int32 x = 0; x < count; ++x) {
@@ -2455,8 +2605,8 @@ void RSDK::DrawBlendedFace(Vector2 *vertices, uint32 *colors, int32 vertCount, i
                 uint16 *subBlendTable = &subtractLookupTable[0x20 * alpha];
 
                 for (int32 s = topScreen; s <= bottomScreen; ++s) {
-                    int32 start  = edge->start;
-                    int32 count  = edge->end - edge->start;
+                    int32 start = edge->start;
+                    int32 count = edge->end - edge->start;
                     int32 deltaR = 0;
                     int32 deltaG = 0;
                     int32 deltaB = 0;
@@ -2487,7 +2637,7 @@ void RSDK::DrawBlendedFace(Vector2 *vertices, uint32 *colors, int32 vertCount, i
 
                     if (edge->end > currentScreen->clipBound_X2) {
                         edge->end = currentScreen->clipBound_X2;
-                        count     = currentScreen->clipBound_X2 - edge->start;
+                        count = currentScreen->clipBound_X2 - edge->start;
                     }
 
                     for (int32 x = 0; x < count; ++x) {
@@ -2507,8 +2657,8 @@ void RSDK::DrawBlendedFace(Vector2 *vertices, uint32 *colors, int32 vertCount, i
 
             case INK_TINT:
                 for (int32 s = topScreen; s <= bottomScreen; ++s) {
-                    int32 start  = edge->start;
-                    int32 count  = edge->end - edge->start;
+                    int32 start = edge->start;
+                    int32 count = edge->end - edge->start;
                     // int32 deltaR = 0;
                     // int32 deltaG = 0;
                     // int32 deltaB = 0;
@@ -2539,7 +2689,7 @@ void RSDK::DrawBlendedFace(Vector2 *vertices, uint32 *colors, int32 vertCount, i
 
                     if (edge->end > currentScreen->clipBound_X2) {
                         edge->end = currentScreen->clipBound_X2;
-                        count     = currentScreen->clipBound_X2 - edge->start;
+                        count = currentScreen->clipBound_X2 - edge->start;
                     }
 
                     for (int32 x = 0; x < count; ++x) {
@@ -2557,8 +2707,8 @@ void RSDK::DrawBlendedFace(Vector2 *vertices, uint32 *colors, int32 vertCount, i
 
             case INK_MASKED:
                 for (int32 s = topScreen; s <= bottomScreen; ++s) {
-                    int32 start  = edge->start;
-                    int32 count  = edge->end - edge->start;
+                    int32 start = edge->start;
+                    int32 count = edge->end - edge->start;
                     int32 deltaR = 0;
                     int32 deltaG = 0;
                     int32 deltaB = 0;
@@ -2585,7 +2735,7 @@ void RSDK::DrawBlendedFace(Vector2 *vertices, uint32 *colors, int32 vertCount, i
 
                     if (edge->end < currentScreen->clipBound_X1 || edge->end > currentScreen->clipBound_X2) {
                         edge->end = currentScreen->clipBound_X2;
-                        count     = currentScreen->clipBound_X2 - edge->start;
+                        count = currentScreen->clipBound_X2 - edge->start;
                     }
 
                     for (int32 x = 0; x < count; ++x) {
@@ -2604,8 +2754,8 @@ void RSDK::DrawBlendedFace(Vector2 *vertices, uint32 *colors, int32 vertCount, i
 
             case INK_UNMASKED:
                 for (int32 s = topScreen; s <= bottomScreen; ++s) {
-                    int32 start  = edge->start;
-                    int32 count  = edge->end - edge->start;
+                    int32 start = edge->start;
+                    int32 count = edge->end - edge->start;
                     int32 deltaR = 0;
                     int32 deltaG = 0;
                     int32 deltaB = 0;
@@ -2636,7 +2786,7 @@ void RSDK::DrawBlendedFace(Vector2 *vertices, uint32 *colors, int32 vertCount, i
 
                     if (edge->end > currentScreen->clipBound_X2) {
                         edge->end = currentScreen->clipBound_X2;
-                        count     = currentScreen->clipBound_X2 - edge->start;
+                        count = currentScreen->clipBound_X2 - edge->start;
                     }
 
                     for (int32 x = 0; x < count; ++x) {
@@ -2654,6 +2804,7 @@ void RSDK::DrawBlendedFace(Vector2 *vertices, uint32 *colors, int32 vertCount, i
                 break;
         }
     }
+#endif
 }
 
 void RSDK::DrawSprite(Animator *animator, Vector2 *position, bool32 screenRelative)
@@ -2895,19 +3046,53 @@ void RSDK::DrawSpriteFlipped(int32 x, int32 y, int32 width, int32 height, int32 
 
     GFXSurface *surface = &gfxSurface[sheetID];
     validDraw           = true;
-    int32 pitch         = currentScreen->pitch - width;
-    int32 gfxPitch      = 0;
-    uint8 *lineBuffer   = NULL;
-    uint8 *pixels       = NULL;
+
+#if EXTRA_HW_RENDER
+    float2 pos1 = { (float)x, (float)y }, pos2 = { (float)(x + width), (float)(y + height) }, tex1 = { (float)sprX, (float)sprY },
+           tex2 = { (float)(sprX + width), (float)(sprY + height) };
+
+    tex1.x /= (1 << surface->lineSize);
+    tex1.y /= surface->height;
+    tex2.x /= (1 << surface->lineSize);
+    tex2.y /= surface->height;
+
+    int32 s            = screens - currentScreen;
+    RenderState *state = currentState + s;
+    auto shader        = new SpriteShader(spriteShader);
+    memcpy(shader->palette, fullPalette, sizeof(fullPalette));
+    memcpy(shader->gfxLineBuffer, gfxLineBuffer, sizeof(gfxLineBuffer));
+    state->shader   = (Shader *)shader;
+    state->fbShader = GetFBShader(inkEffect, alpha / 255.f);
+    state->texture  = surface;
+
+    state->indexBuffer  = AllocateIndexBuffer(6);
+    state->vertexBuffer = AllocateVertexBuffer(4);
+
+    switch (direction) {
+        case FLIP_NONE: PlaceQuad(state->vertexBuffer, pos1, pos2, tex1, tex2, 0); break;
+        case FLIP_X: PlaceQuad(state->vertexBuffer, pos1, pos2, { tex2.x, tex1.y }, { tex1.x, tex2.y }, 0); break;
+        case FLIP_Y: PlaceQuad(state->vertexBuffer, pos1, pos2, { tex1.x, tex2.y }, { tex2.x, tex1.y }, 0); break;
+        case FLIP_XY: PlaceQuad(state->vertexBuffer, pos1, pos2, tex2, tex1, 0); break;
+    }
+
+    state->vertexCount += 4;
+    state->indexCount += 6;
+    AddQuadsToBuffer(state->indexBuffer, 1);
+    PushCurrentState(s);
+#else
+    int32 pitch = currentScreen->pitch - width;
+    int32 gfxPitch = 0;
+    uint8 *lineBuffer = NULL;
+    uint8 *pixels = NULL;
     uint16 *frameBuffer = NULL;
 
     switch (direction) {
         default: break;
 
         case FLIP_NONE:
-            gfxPitch    = surface->width - width;
-            lineBuffer  = &gfxLineBuffer[y];
-            pixels      = &surface->pixels[sprX + surface->width * sprY];
+            gfxPitch = surface->width - width;
+            lineBuffer = &gfxLineBuffer[y];
+            pixels = &surface->pixels[sprX + surface->width * sprY];
             frameBuffer = &currentScreen->frameBuffer[x + currentScreen->pitch * y];
             switch (inkEffect) {
                 case INK_NONE:
@@ -2944,7 +3129,7 @@ void RSDK::DrawSpriteFlipped(int32 x, int32 y, int32 width, int32 height, int32 
 
                 case INK_ALPHA: {
                     uint16 *fbufferBlend = &blendLookupTable[0x20 * (0xFF - alpha)];
-                    uint16 *pixelBlend   = &blendLookupTable[0x20 * alpha];
+                    uint16 *pixelBlend = &blendLookupTable[0x20 * alpha];
 
                     while (height--) {
                         uint16 *activePalette = fullPalette[*lineBuffer];
@@ -3054,9 +3239,9 @@ void RSDK::DrawSpriteFlipped(int32 x, int32 y, int32 width, int32 height, int32 
             break;
 
         case FLIP_X:
-            gfxPitch    = width + surface->width;
-            lineBuffer  = &gfxLineBuffer[y];
-            pixels      = &surface->pixels[widthFlip - 1 + sprX + surface->width * sprY];
+            gfxPitch = width + surface->width;
+            lineBuffer = &gfxLineBuffer[y];
+            pixels = &surface->pixels[widthFlip - 1 + sprX + surface->width * sprY];
             frameBuffer = &currentScreen->frameBuffer[x + currentScreen->pitch * y];
             switch (inkEffect) {
                 case INK_NONE:
@@ -3093,7 +3278,7 @@ void RSDK::DrawSpriteFlipped(int32 x, int32 y, int32 width, int32 height, int32 
 
                 case INK_ALPHA: {
                     uint16 *fbufferBlend = &blendLookupTable[0x20 * (0xFF - alpha)];
-                    uint16 *pixelBlend   = &blendLookupTable[0x20 * alpha];
+                    uint16 *pixelBlend = &blendLookupTable[0x20 * alpha];
 
                     while (height--) {
                         uint16 *activePalette = fullPalette[*lineBuffer];
@@ -3203,9 +3388,9 @@ void RSDK::DrawSpriteFlipped(int32 x, int32 y, int32 width, int32 height, int32 
             break;
 
         case FLIP_Y:
-            gfxPitch    = width + surface->width;
-            lineBuffer  = &gfxLineBuffer[y];
-            pixels      = &surface->pixels[sprX + surface->width * (sprY + heightFlip - 1)];
+            gfxPitch = width + surface->width;
+            lineBuffer = &gfxLineBuffer[y];
+            pixels = &surface->pixels[sprX + surface->width * (sprY + heightFlip - 1)];
             frameBuffer = &currentScreen->frameBuffer[x + currentScreen->pitch * y];
             switch (inkEffect) {
                 case INK_NONE:
@@ -3242,7 +3427,7 @@ void RSDK::DrawSpriteFlipped(int32 x, int32 y, int32 width, int32 height, int32 
 
                 case INK_ALPHA: {
                     uint16 *fbufferBlend = &blendLookupTable[0x20 * (0xFF - alpha)];
-                    uint16 *pixelBlend   = &blendLookupTable[0x20 * alpha];
+                    uint16 *pixelBlend = &blendLookupTable[0x20 * alpha];
 
                     while (height--) {
                         uint16 *activePalette = fullPalette[*lineBuffer];
@@ -3352,9 +3537,9 @@ void RSDK::DrawSpriteFlipped(int32 x, int32 y, int32 width, int32 height, int32 
             break;
 
         case FLIP_XY:
-            gfxPitch    = surface->width - width;
-            lineBuffer  = &gfxLineBuffer[y];
-            pixels      = &surface->pixels[widthFlip - 1 + sprX + surface->width * (sprY + heightFlip - 1)];
+            gfxPitch = surface->width - width;
+            lineBuffer = &gfxLineBuffer[y];
+            pixels = &surface->pixels[widthFlip - 1 + sprX + surface->width * (sprY + heightFlip - 1)];
             frameBuffer = &currentScreen->frameBuffer[x + currentScreen->pitch * y];
             switch (inkEffect) {
                 case INK_NONE:
@@ -3391,7 +3576,7 @@ void RSDK::DrawSpriteFlipped(int32 x, int32 y, int32 width, int32 height, int32 
 
                 case INK_ALPHA: {
                     uint16 *fbufferBlend = &blendLookupTable[0x20 * (0xFF - alpha)];
-                    uint16 *pixelBlend   = &blendLookupTable[0x20 * alpha];
+                    uint16 *pixelBlend = &blendLookupTable[0x20 * alpha];
 
                     while (height--) {
                         uint16 *activePalette = fullPalette[*lineBuffer];
@@ -3500,6 +3685,7 @@ void RSDK::DrawSpriteFlipped(int32 x, int32 y, int32 width, int32 height, int32 
             }
             break;
     }
+#endif
 }
 void RSDK::DrawSpriteRotozoom(int32 x, int32 y, int32 pivotX, int32 pivotY, int32 width, int32 height, int32 sprX, int32 sprY, int32 scaleX,
                               int32 scaleY, int32 direction, int16 rotation, int32 inkEffect, int32 alpha, int32 sheetID)
@@ -3623,31 +3809,71 @@ void RSDK::DrawSpriteRotozoom(int32 x, int32 y, int32 pivotX, int32 pivotY, int3
     int32 ySize = bottom - top;
     if (xSize >= 1 && ySize >= 1) {
         GFXSurface *surface = &gfxSurface[sheetID];
-
-        int32 fullX         = TO_FIXED(sprX + width);
-        int32 fullY         = TO_FIXED(sprY + height);
         validDraw           = true;
-        int32 fullScaleX    = (int32)((512.0 / (float)scaleX) * 512.0);
-        int32 fullScaleY    = (int32)((512.0 / (float)scaleY) * 512.0);
-        int32 deltaXLen     = fullScaleX * sine >> 2;
-        int32 deltaX        = fullScaleX * cosine >> 2;
-        int32 pitch         = currentScreen->pitch - xSize;
-        int32 deltaYLen     = fullScaleY * cosine >> 2;
-        int32 deltaY        = fullScaleY * sine >> 2;
-        int32 lineSize      = surface->lineSize;
-        uint8 *lineBuffer   = &gfxLineBuffer[top];
-        int32 xLen          = left - x;
-        int32 yLen          = top - y;
-        uint8 *pixels       = surface->pixels;
+#if EXTRA_HW_RENDER
+
+        float sY = scaleY / (float)(1 << 9);
+        float sX = scaleX / (float)(1 << 9);
+        float sine = sin512LookupTable[angle] / (float)(1 << 9);
+        float cosi = cos512LookupTable[angle] / (float)(1 << 9);
+        // float sine = sin(angle / 256.f * RSDK_PI);
+        // float cosi = cos(angle / 256.f * RSDK_PI);
+
+        float2 tex1 = { sprX + .5f, sprY + .5f }, tex2 = { sprX + width - .5f, sprY + height - .5f };
+        tex1.x /= (1 << surface->lineSize);
+        tex1.y /= surface->height;
+        tex2.x /= (1 << surface->lineSize);
+        tex2.y /= surface->height;
+
+        int32 s            = screens - currentScreen;
+        RenderState *state = currentState + s;
+        auto shader        = new SpriteShader(spriteShader);
+        memcpy(shader->palette, fullPalette, sizeof(fullPalette));
+        memcpy(shader->gfxLineBuffer, gfxLineBuffer, sizeof(gfxLineBuffer));
+        state->shader   = (Shader *)shader;
+        state->fbShader = GetFBShader(inkEffect, alpha / 255.f);
+        state->texture  = surface;
+
+        state->indexBuffer  = AllocateIndexBuffer(6);
+        state->vertexBuffer = AllocateVertexBuffer(4);
+
+        int32 sign = (0 < (direction == FLIP_NONE)) - ((direction == FLIP_NONE) <= 0);
+        float2 pos1 = { sX * sign * pivotX, sY * pivotY }, pos2 = { sX * sign * (pivotX + width), sY * (pivotY + height) };
+
+        state->vertexBuffer[0] = { { x + (cosi * pos1.x + sine * pos1.y), y + (cosi * pos1.y - sine * pos1.x), 1.0 }, 0, tex1 };
+        state->vertexBuffer[1] = { { x + (cosi * pos2.x + sine * pos1.y), y + (cosi * pos1.y - sine * pos2.x), 1.0 }, 0, {tex2.x, tex1.y} };
+        state->vertexBuffer[2] = { { x + (cosi * pos1.x + sine * pos2.y), y + (cosi * pos2.y - sine * pos1.x), 1.0 }, 0, {tex1.x, tex2.y} };
+        state->vertexBuffer[3] = { { x + (cosi * pos2.x + sine * pos2.y), y + (cosi * pos2.y - sine * pos2.x), 1.0 }, 0, tex2 };
+
+        state->vertexCount += 4;
+        state->indexCount += 6;
+        AddQuadsToBuffer(state->indexBuffer, 1);
+        PushCurrentState(s);
+
+#else
+        int32 fullX = TO_FIXED(sprX + width);
+        int32 fullY = TO_FIXED(sprY + height);
+        int32 fullScaleX = (int32)((512.0 / (float)scaleX) * 512.0);
+        int32 fullScaleY = (int32)((512.0 / (float)scaleY) * 512.0);
+        int32 deltaXLen = fullScaleX * sine >> 2;
+        int32 deltaX = fullScaleX * cosine >> 2;
+        int32 pitch = currentScreen->pitch - xSize;
+        int32 deltaYLen = fullScaleY * cosine >> 2;
+        int32 deltaY = fullScaleY * sine >> 2;
+        int32 lineSize = surface->lineSize;
+        uint8 *lineBuffer = &gfxLineBuffer[top];
+        int32 xLen = left - x;
+        int32 yLen = top - y;
+        uint8 *pixels = surface->pixels;
         uint16 *frameBuffer = &currentScreen->frameBuffer[left + (top * currentScreen->pitch)];
-        int32 fullSprX      = TO_FIXED(sprX) - 1;
-        int32 fullSprY      = TO_FIXED(sprY) - 1;
+        int32 fullSprX = TO_FIXED(sprX) - 1;
+        int32 fullSprY = TO_FIXED(sprY) - 1;
 
         int32 drawX = 0, drawY = 0;
         if (direction == FLIP_X) {
-            drawX     = sprXPos + deltaXLen * yLen - deltaX * xLen - (fullScaleX >> 1);
-            drawY     = sprYPos + deltaYLen * yLen + deltaY * xLen;
-            deltaX    = -deltaX;
+            drawX = sprXPos + deltaXLen * yLen - deltaX * xLen - (fullScaleX >> 1);
+            drawY = sprYPos + deltaYLen * yLen + deltaY * xLen;
+            deltaX = -deltaX;
             deltaXLen = -deltaXLen;
         }
         else if (!direction) {
@@ -3659,8 +3885,8 @@ void RSDK::DrawSpriteRotozoom(int32 x, int32 y, int32 pivotX, int32 pivotY, int3
             case INK_NONE:
                 for (int32 y = 0; y < ySize; ++y) {
                     uint16 *activePalette = fullPalette[*lineBuffer++];
-                    int32 drawXPos        = drawX;
-                    int32 drawYPos        = drawY;
+                    int32 drawXPos = drawX;
+                    int32 drawYPos = drawY;
                     for (int32 x = 0; x < xSize; ++x) {
                         if (drawXPos >= fullSprX && drawXPos < fullX && drawYPos >= fullSprY && drawYPos < fullY) {
                             uint8 index = pixels[(FROM_FIXED(drawYPos) << lineSize) + FROM_FIXED(drawXPos)];
@@ -3682,8 +3908,8 @@ void RSDK::DrawSpriteRotozoom(int32 x, int32 y, int32 pivotX, int32 pivotY, int3
             case INK_BLEND:
                 for (int32 y = 0; y < ySize; ++y) {
                     uint16 *activePalette = fullPalette[*lineBuffer++];
-                    int32 drawXPos        = drawX;
-                    int32 drawYPos        = drawY;
+                    int32 drawXPos = drawX;
+                    int32 drawYPos = drawY;
                     for (int32 x = 0; x < xSize; ++x) {
                         if (drawXPos >= fullSprX && drawXPos < fullX && drawYPos >= fullSprY && drawYPos < fullY) {
                             uint8 index = pixels[(FROM_FIXED(drawYPos) << lineSize) + FROM_FIXED(drawXPos)];
@@ -3704,12 +3930,12 @@ void RSDK::DrawSpriteRotozoom(int32 x, int32 y, int32 pivotX, int32 pivotY, int3
 
             case INK_ALPHA: {
                 uint16 *fbufferBlend = &blendLookupTable[0x20 * (0xFF - alpha)];
-                uint16 *pixelBlend   = &blendLookupTable[0x20 * alpha];
+                uint16 *pixelBlend = &blendLookupTable[0x20 * alpha];
 
                 for (int32 y = 0; y < ySize; ++y) {
                     uint16 *activePalette = fullPalette[*lineBuffer++];
-                    int32 drawXPos        = drawX;
-                    int32 drawYPos        = drawY;
+                    int32 drawXPos = drawX;
+                    int32 drawYPos = drawY;
                     for (int32 x = 0; x < xSize; ++x) {
                         if (drawXPos >= fullSprX && drawXPos < fullX && drawYPos >= fullSprY && drawYPos < fullY) {
                             uint8 index = pixels[(FROM_FIXED(drawYPos) << lineSize) + FROM_FIXED(drawXPos)];
@@ -3734,8 +3960,8 @@ void RSDK::DrawSpriteRotozoom(int32 x, int32 y, int32 pivotX, int32 pivotY, int3
                 uint16 *blendTablePtr = &blendLookupTable[0x20 * alpha];
                 for (int32 y = 0; y < ySize; ++y) {
                     uint16 *activePalette = fullPalette[*lineBuffer++];
-                    int32 drawXPos        = drawX;
-                    int32 drawYPos        = drawY;
+                    int32 drawXPos = drawX;
+                    int32 drawYPos = drawY;
                     for (int32 x = 0; x < xSize; ++x) {
                         if (drawXPos >= fullSprX && drawXPos < fullX && drawYPos >= fullSprY && drawYPos < fullY) {
                             uint8 index = pixels[(FROM_FIXED(drawYPos) << lineSize) + FROM_FIXED(drawXPos)];
@@ -3760,8 +3986,8 @@ void RSDK::DrawSpriteRotozoom(int32 x, int32 y, int32 pivotX, int32 pivotY, int3
                 uint16 *subBlendTable = &subtractLookupTable[0x20 * alpha];
                 for (int32 y = 0; y < ySize; ++y) {
                     uint16 *activePalette = fullPalette[*lineBuffer++];
-                    int32 drawXPos        = drawX;
-                    int32 drawYPos        = drawY;
+                    int32 drawXPos = drawX;
+                    int32 drawYPos = drawY;
                     for (int32 x = 0; x < xSize; ++x) {
                         if (drawXPos >= fullSprX && drawXPos < fullX && drawYPos >= fullSprY && drawYPos < fullY) {
                             uint8 index = pixels[(FROM_FIXED(drawYPos) << lineSize) + FROM_FIXED(drawXPos)];
@@ -3807,8 +4033,8 @@ void RSDK::DrawSpriteRotozoom(int32 x, int32 y, int32 pivotX, int32 pivotY, int3
             case INK_MASKED:
                 for (int32 y = 0; y < ySize; ++y) {
                     uint16 *activePalette = fullPalette[*lineBuffer++];
-                    int32 drawXPos        = drawX;
-                    int32 drawYPos        = drawY;
+                    int32 drawXPos = drawX;
+                    int32 drawYPos = drawY;
                     for (int32 x = 0; x < xSize; ++x) {
                         if (drawXPos >= fullSprX && drawXPos < fullX && drawYPos >= fullSprY && drawYPos < fullY) {
                             uint8 index = pixels[(FROM_FIXED(drawYPos) << lineSize) + FROM_FIXED(drawXPos)];
@@ -3830,8 +4056,8 @@ void RSDK::DrawSpriteRotozoom(int32 x, int32 y, int32 pivotX, int32 pivotY, int3
             case INK_UNMASKED:
                 for (int32 y = 0; y < ySize; ++y) {
                     uint16 *activePalette = fullPalette[*lineBuffer++];
-                    int32 drawXPos        = drawX;
-                    int32 drawYPos        = drawY;
+                    int32 drawXPos = drawX;
+                    int32 drawYPos = drawY;
                     for (int32 x = 0; x < xSize; ++x) {
                         if (drawXPos >= fullSprX && drawXPos < fullX && drawYPos >= fullSprY && drawYPos < fullY) {
                             uint8 index = pixels[(FROM_FIXED(drawYPos) << lineSize) + FROM_FIXED(drawXPos)];
@@ -3850,6 +4076,7 @@ void RSDK::DrawSpriteRotozoom(int32 x, int32 y, int32 pivotX, int32 pivotY, int3
                 }
                 break;
         }
+#endif
     }
 }
 
@@ -4378,9 +4605,24 @@ void RSDK::DrawString(Animator *animator, Vector2 *position, String *string, int
         }
     }
 }
+
 void RSDK::DrawDevString(const char *string, int32 x, int32 y, int32 align, uint32 color)
 {
     uint16 color16 = rgb32To16_B[(color >> 0) & 0xFF] | rgb32To16_G[(color >> 8) & 0xFF] | rgb32To16_R[(color >> 16) & 0xFF];
+
+#if EXTRA_HW_RENDER
+    if (!strlen(string))
+        return;
+    int32 s            = screens - currentScreen;
+    RenderState *state = currentState + s;
+    state->shader      = (Shader *)new DevTextShader(devTextShader);
+    state->fbShader    = (Shader *)new FBNoneShader(fbNoneShader);
+    state->texture     = &gfxSurface[1];
+
+    state->indexBuffer  = AllocateIndexBuffer(strlen(string) * 6);
+    state->vertexBuffer = AllocateVertexBuffer(strlen(string) * 4);
+    uint32 quadCount    = 0;
+#endif
 
     int32 charOffset   = 0;
     bool32 linesRemain = true;
@@ -4420,6 +4662,16 @@ void RSDK::DrawDevString(const char *string, int32 x, int32 y, int32 align, uint
 
                     if ((*curChar < '\t' || *curChar > '\n') && *curChar != ' ') {
                         uint8 *textStencilPtr = &devTextStencil[0x40 * *curChar];
+#if EXTRA_HW_RENDER
+                        // clang-format off
+                        PlaceQuad(state->vertexBuffer + state->vertexCount, 
+                            { (float)(drawX + 0), (float)(y + 0) },    { (float)(drawX + 8), (float)(y + 8) }, 
+                            { 0.0, (*curChar + 0) / (float)(1 << 7) }, { 1.0, (*curChar + 1) / (float)(1 << 7) }, 
+                            color);
+                        // clang-format on
+                        state->vertexCount += 4;
+                        quadCount += 1;
+#else
 
                         for (int32 h = 0; h < 8; ++h) {
                             for (int32 w = 0; w < 8; ++w) {
@@ -4432,6 +4684,7 @@ void RSDK::DrawDevString(const char *string, int32 x, int32 y, int32 align, uint
 
                             frameBuffer += currentScreen->pitch - 8;
                         }
+#endif
                     }
 
                     ++curChar;
@@ -4442,4 +4695,10 @@ void RSDK::DrawDevString(const char *string, int32 x, int32 y, int32 align, uint
 
         y += 8;
     }
+
+#if EXTRA_HW_RENDER
+    state->indexCount += quadCount * 6;
+    AddQuadsToBuffer(state->indexBuffer, quadCount);
+    PushCurrentState(s);
+#endif
 }

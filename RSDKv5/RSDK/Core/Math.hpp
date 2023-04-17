@@ -15,6 +15,11 @@ namespace RSDK
 #define TO_FIXED(x)   ((x) << 16)
 #define FROM_FIXED(x) ((x) >> 16)
 
+#if EXTRA_HW_RENDER
+#define TO_FIXED_F(x)   ((x) * (float)(1 << 16))
+#define FROM_FIXED_F(x) ((x) / (float)(1 << 16))
+#endif
+
 // M_PI is *too* accurate, so use this instead
 #define RSDK_PI (3.1415927f)
 

@@ -1,9 +1,14 @@
+#include "GLFWRenderDevice.hpp"
+#include "Rendering.hpp"
 #ifndef _GLVERSION
+#if EXTRA_HW_RENDER
+#define _GLVERSION 32
+#else
 #define _GLVERSION 20
-//#define _GLVERSION 33
+#endif
 #endif
 
-#if _GLVERSION > 30
+#if _GLVERSION >= 30
 #define _GLSLVERSION "#version 130\n#define in_V in\n#define in_F in\n"
 #else
 #define _GLSLVERSION "#version 110\n#define in_V attribute\n#define out varying\n#define in_F varying\n"
@@ -41,21 +46,26 @@ void main()
 }
 )aa";
 
-GLFWwindow *RenderDevice::window;
-GLuint RenderDevice::VAO;
-GLuint RenderDevice::VBO;
+GLFWwindow *RSDK::RenderDevice::window;
+GLuint RSDK::RenderDevice::VAO;
+GLuint RSDK::RenderDevice::VBO;
 
-GLuint RenderDevice::screenTextures[SCREEN_COUNT];
-GLuint RenderDevice::imageTexture;
+GLuint RSDK::RenderDevice::screenTextures[SCREEN_COUNT];
+GLuint RSDK::RenderDevice::imageTexture;
 
-double RenderDevice::lastFrame;
-double RenderDevice::targetFreq;
+double RSDK::RenderDevice::lastFrame;
+double RSDK::RenderDevice::targetFreq;
 
-int32 RenderDevice::monitorIndex;
+int32 RSDK::RenderDevice::monitorIndex;
 
-uint32 *RenderDevice::videoBuffer;
+uint32 *RSDK::RenderDevice::videoBuffer;
 
-bool RenderDevice::Init()
+#if EXTRA_HW_RENDER
+float2 scaling;
+float2 texPreScale;
+#endif
+
+bool RSDK::RenderDevice::Init()
 {
     glfwInit();
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, _GLVERSION / 10);
@@ -105,7 +115,7 @@ bool RenderDevice::Init()
     return true;
 }
 
-bool RenderDevice::SetupRendering()
+bool RSDK::RenderDevice::SetupRendering()
 {
     glfwMakeContextCurrent(window);
     GLenum err;
@@ -130,7 +140,7 @@ bool RenderDevice::SetupRendering()
     return true;
 }
 
-void RenderDevice::GetDisplays()
+void RSDK::RenderDevice::GetDisplays()
 {
     GLFWmonitor *monitor = glfwGetWindowMonitor(window);
     if (!monitor)
@@ -180,7 +190,14 @@ void RenderDevice::GetDisplays()
     }
 }
 
-bool RenderDevice::InitGraphicsAPI()
+#if EXTRA_HW_RENDER
+bool SetupHWRendering();
+void PrepareHWPass();
+#endif
+
+Vector2 viewportPos{}, viewportSize{};
+
+bool RSDK::RenderDevice::InitGraphicsAPI()
 {
     glClearColor(0.0, 0.0, 0.0, 1.0);
     glDisable(GL_DEPTH_TEST);
@@ -191,7 +208,7 @@ bool RenderDevice::InitGraphicsAPI()
 
     // setup buffers
 
-#if _GLVERSION > 30
+#if _GLVERSION >= 30
     glGenVertexArrays(1, &VAO);
     glBindVertexArray(VAO);
 #endif
@@ -263,11 +280,10 @@ bool RenderDevice::InitGraphicsAPI()
     pixelSize.y     = screens[0].size.y;
     float pixAspect = pixelSize.x / pixelSize.y;
 
-    Vector2 viewportPos{};
     Vector2 lastViewSize;
 
     glfwGetWindowSize(window, &lastViewSize.x, &lastViewSize.y);
-    Vector2 viewportSize = lastViewSize;
+    viewportSize = lastViewSize;
 
     if ((viewSize.x / viewSize.y) <= ((pixelSize.x / pixelSize.y) + 0.1)) {
         if ((pixAspect - 0.1) > (viewSize.x / viewSize.y)) {
@@ -295,7 +311,16 @@ bool RenderDevice::InitGraphicsAPI()
         textureSize.y = 512.0;
     }
 
-    glViewport(viewportPos.x, viewportPos.y, viewportSize.x, viewportSize.y);
+#if EXTRA_HW_RENDER
+    texPreScale = textureSize;
+    scaling.x   = viewSize.x / pixelSize.x;
+    scaling.y   = viewSize.y / pixelSize.y;
+
+    while ((textureSize.x < scaling.x * screenWidth) || (textureSize.y < scaling.y * maxPixHeight)) {
+        textureSize.x *= 2;
+        textureSize.y *= 2;
+    }
+#endif
 
     glActiveTexture(GL_TEXTURE0);
     glGenTextures(SCREEN_COUNT, screenTextures);
@@ -328,7 +353,11 @@ bool RenderDevice::InitGraphicsAPI()
     videoSettings.viewportW = 1.0 / viewSize.x;
     videoSettings.viewportH = 1.0 / viewSize.y;
 
+#if EXTRA_HW_RENDER
+    return SetupHWRendering();
+#else
     return true;
+#endif
 }
 
 // CUSTOM BUFFER FOR SHENANIGAN PURPOSES
@@ -455,9 +484,9 @@ const RenderVertex rsdkGLVertexBuffer[24] =
     { { -1.0, +1.0,  1.0 }, 0xFFFFFFFF, {  0.0,  0.0 } }
 };
 #endif
+// clang-format on
 
-
-void RenderDevice::InitVertexBuffer()
+void RSDK::RenderDevice::InitVertexBuffer()
 {
     RenderVertex vertBuffer[sizeof(rsdkGLVertexBuffer) / sizeof(RenderVertex)];
     memcpy(vertBuffer, rsdkGLVertexBuffer, sizeof(rsdkGLVertexBuffer));
@@ -477,34 +506,43 @@ void RenderDevice::InitVertexBuffer()
 
         if (vertex->tex.y)
             vertex->tex.y = screens[0].size.y * (1.0 / textureSize.y);
+#if EXTRA_HW_RENDER
+        if (vertex->tex.x)
+            vertex->tex.x *= scaling.x;
+
+        if (vertex->tex.y)
+            vertex->tex.y *= scaling.y;
+#endif
     }
 
     glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(RenderVertex) * (!RETRO_REV02 ? 24 : 60), vertBuffer);
 }
 
-void RenderDevice::InitFPSCap()
+void RSDK::RenderDevice::InitFPSCap()
 {
     lastFrame  = glfwGetTime();
     targetFreq = 1.0 / videoSettings.refreshRate;
 }
-bool RenderDevice::CheckFPSCap()
+bool RSDK::RenderDevice::CheckFPSCap()
 {
     if (lastFrame + targetFreq < glfwGetTime())
         return true;
 
     return false;
 }
-void RenderDevice::UpdateFPSCap() { lastFrame = glfwGetTime(); }
+void RSDK::RenderDevice::UpdateFPSCap() { lastFrame = glfwGetTime(); }
 
-void RenderDevice::CopyFrameBuffer()
+#if !EXTRA_HW_RENDER
+void RSDK::RenderDevice::CopyFrameBuffer()
 {
     for (int32 s = 0; s < videoSettings.screenCount; ++s) {
         glBindTexture(GL_TEXTURE_2D, screenTextures[s]);
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, screens[s].pitch, SCREEN_YSIZE, GL_RGB, GL_UNSIGNED_SHORT_5_6_5, screens[s].frameBuffer);
     }
 }
+#endif
 
-bool RenderDevice::ProcessEvents()
+bool RSDK::RenderDevice::ProcessEvents()
 {
     glfwPollEvents();
     if (glfwWindowShouldClose(window))
@@ -512,7 +550,7 @@ bool RenderDevice::ProcessEvents()
     return false;
 }
 
-void RenderDevice::FlipScreen()
+void RSDK::RenderDevice::FlipScreen()
 {
     if (lastShaderID != videoSettings.shaderID) {
         lastShaderID = videoSettings.shaderID;
@@ -530,9 +568,21 @@ void RenderDevice::FlipScreen()
         return;
     }
 
+#if EXTRA_HW_RENDER
+    glBindVertexArray(VAO);
+    glActiveTexture(GL_TEXTURE0);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    SetLinear(shaderList[videoSettings.shaderID].linear);
+    if (videoSettings.shaderSupport)
+        glUseProgram(shaderList[videoSettings.shaderID].programID);
+    glViewport(viewportPos.x, viewportPos.y, viewportSize.x, viewportSize.y);
+    glDisable(GL_SCISSOR_TEST);
+#endif
+
     glClear(GL_COLOR_BUFFER_BIT);
     if (videoSettings.shaderSupport) {
-        glUniform2fv(glGetUniformLocation(shaderList[videoSettings.shaderID].programID, "textureSize"), 1, &textureSize.x);
+        glUniform2fv(glGetUniformLocation(shaderList[videoSettings.shaderID].programID, "textureSize"), 1, &texPreScale.x);
         glUniform2fv(glGetUniformLocation(shaderList[videoSettings.shaderID].programID, "pixelSize"), 1, &pixelSize.x);
         glUniform2fv(glGetUniformLocation(shaderList[videoSettings.shaderID].programID, "viewSize"), 1, &viewSize.x);
         glUniform1f(glGetUniformLocation(shaderList[videoSettings.shaderID].programID, "screenDim"), videoSettings.dimMax * videoSettings.dimPercent);
@@ -606,9 +656,12 @@ void RenderDevice::FlipScreen()
 
     glFlush();
     glfwSwapBuffers(window);
+#if EXTRA_HW_RENDER
+    PrepareHWPass();
+#endif
 }
 
-void RenderDevice::Release(bool32 isRefresh)
+void RSDK::RenderDevice::Release(bool32 isRefresh)
 {
     glDeleteTextures(SCREEN_COUNT, screenTextures);
     glDeleteTextures(1, &imageTexture);
@@ -617,8 +670,8 @@ void RenderDevice::Release(bool32 isRefresh)
     for (int32 i = 0; i < shaderCount; ++i) {
         glDeleteProgram(shaderList[i].programID);
     }
-    
-#if _GLVERSION > 30
+
+#if _GLVERSION >= 30
     glDeleteVertexArrays(1, &VAO);
     glDeleteBuffers(1, &VBO);
 #endif
@@ -643,12 +696,12 @@ void RenderDevice::Release(bool32 isRefresh)
     }
 }
 
-bool RenderDevice::InitShaders()
+bool RSDK::RenderDevice::InitShaders()
 {
     videoSettings.shaderSupport = true;
     int32 maxShaders            = 0;
 #if RETRO_USE_MOD_LOADER
-    shaderCount                 = 0;
+    shaderCount = 0;
 #endif
 
     LoadShader("None", false);
@@ -680,7 +733,6 @@ bool RenderDevice::InitShaders()
         GLint success;
         char infoLog[0x1000];
 
-
         GLuint vert, frag;
         const GLchar *vchar[] = { _GLSLVERSION, _GLDEFINE, backupVertex };
         vert                  = glCreateShader(GL_VERTEX_SHADER);
@@ -696,21 +748,21 @@ bool RenderDevice::InitShaders()
         if (!success) {
             glGetShaderInfoLog(vert, 0x1000, NULL, infoLog);
             PrintLog(PRINT_NORMAL, "BACKUP vertex shader compiling failed:\n%s", infoLog);
-        }        
+        }
 
         glGetShaderiv(frag, GL_COMPILE_STATUS, &success);
         if (!success) {
             glGetShaderInfoLog(frag, 0x1000, NULL, infoLog);
             PrintLog(PRINT_NORMAL, "BACKUP fragment shader compiling failed:\n%s", infoLog);
-        }     
+        }
         shader->programID = glCreateProgram();
         glAttachShader(shader->programID, vert);
         glAttachShader(shader->programID, frag);
 
         glBindAttribLocation(shader->programID, 0, "in_pos");
-        //glBindAttribLocation(shader->programID, 1, "in_color");
+        // glBindAttribLocation(shader->programID, 1, "in_color");
         glBindAttribLocation(shader->programID, 1, "in_UV");
-        
+
         glLinkProgram(shader->programID);
         glDeleteShader(vert);
         glDeleteShader(frag);
@@ -726,29 +778,15 @@ bool RenderDevice::InitShaders()
     return true;
 }
 
-void RenderDevice::LoadShader(const char *fileName, bool32 linear)
+GLuint GL_LoadShader(const char *, const char *, bool builtin = false);
+GLuint GL_LoadShader(const char *vertf, const char *fragf, bool builtin)
 {
-    char fullFilePath[0x100];
     FileInfo info;
-
-    for (int32 i = 0; i < shaderCount; ++i) {
-        if (strcmp(shaderList[i].name, fileName) == 0)
-            return;
-    }
-
-    if (shaderCount == SHADER_COUNT)
-        return;
-
-    ShaderEntry *shader = &shaderList[shaderCount];
-    shader->linear      = linear;
-    sprintf_s(shader->name, sizeof(shader->name), "%s", fileName);
-
     GLint success;
     char infoLog[0x1000];
     GLuint vert, frag;
-    sprintf_s(fullFilePath, sizeof(fullFilePath), "Data/Shaders/OGL/None.vs");
     InitFileInfo(&info);
-    if (LoadFile(&info, fullFilePath, FMODE_RB)) {
+    if (LoadFile(&info, vertf, FMODE_RB)) {
         uint8 *fileData = NULL;
         AllocateStorage((void **)&fileData, info.fileSize + 1, DATASET_TMP, false);
         ReadBytes(&info, fileData, info.fileSize);
@@ -764,15 +802,14 @@ void RenderDevice::LoadShader(const char *fileName, bool32 linear)
         if (!success) {
             glGetShaderInfoLog(vert, 0x1000, NULL, infoLog);
             PrintLog(PRINT_NORMAL, "Vertex shader compiling failed:\n%s", infoLog);
-            return;
-        }        
+            return 0;
+        }
     }
     else
-        return;
+        return 0;
 
-    sprintf_s(fullFilePath, sizeof(fullFilePath), "Data/Shaders/OGL/%s.fs", fileName);
     InitFileInfo(&info);
-    if (LoadFile(&info, fullFilePath, FMODE_RB)) {
+    if (LoadFile(&info, fragf, FMODE_RB)) {
         uint8 *fileData = NULL;
         AllocateStorage((void **)&fileData, info.fileSize + 1, DATASET_TMP, false);
         ReadBytes(&info, fileData, info.fileSize);
@@ -788,34 +825,57 @@ void RenderDevice::LoadShader(const char *fileName, bool32 linear)
         if (!success) {
             glGetShaderInfoLog(frag, 0x1000, NULL, infoLog);
             PrintLog(PRINT_NORMAL, "Fragment shader compiling failed:\n%s", infoLog);
-            return;
-        }     
+            return 0;
+        }
     }
     else
-        return;
+        return 0;
 
-    shader->programID = glCreateProgram();
-    glAttachShader(shader->programID, vert);
-    glAttachShader(shader->programID, frag);
+    GLuint ret = glCreateProgram();
+    glAttachShader(ret, vert);
+    glAttachShader(ret, frag);
 
-    glBindAttribLocation(shader->programID, 0, "in_pos");
-    //glBindAttribLocation(shader->programID, 1, "in_color");
-    glBindAttribLocation(shader->programID, 1, "in_UV");
+    glBindAttribLocation(ret, 0, "in_pos");
+    if (!builtin)
+        glBindAttribLocation(ret, 1, "in_color");
+    glBindAttribLocation(ret, builtin ? 1 : 2, "in_UV");
 
-    glLinkProgram(shader->programID);
-    glGetProgramiv(shader->programID, GL_LINK_STATUS, &success);
+    glLinkProgram(ret);
+    glGetProgramiv(ret, GL_LINK_STATUS, &success);
     if (!success) {
-        glGetProgramInfoLog(shader->programID, 0x1000, NULL, infoLog);
+        glGetProgramInfoLog(ret, 0x1000, NULL, infoLog);
         PrintLog(PRINT_NORMAL, "OpenGL shader linking failed:\n%s", infoLog);
-        return;
+        return 0;
     }
     glDeleteShader(vert);
     glDeleteShader(frag);
 
+    return ret;
+}
+
+void RSDK::RenderDevice::LoadShader(const char *fileName, bool32 linear)
+{
+    char fullFilePath[0x100];
+
+    for (int32 i = 0; i < shaderCount; ++i) {
+        if (strcmp(shaderList[i].name, fileName) == 0)
+            return;
+    }
+
+    if (shaderCount == SHADER_COUNT)
+        return;
+
+    ShaderEntry *shader = &shaderList[shaderCount];
+    shader->linear      = linear;
+    sprintf_s(shader->name, sizeof(shader->name), "%s", fileName);
+
+    sprintf_s(fullFilePath, sizeof(fullFilePath), "Data/Shaders/OGL/%s.fs", fileName);
+    shader->programID = GL_LoadShader("Data/Shaders/OGL/None.vs", fullFilePath, true);
+
     shaderCount++;
 };
 
-void RenderDevice::RefreshWindow()
+void RSDK::RenderDevice::RefreshWindow()
 {
     videoSettings.windowState = WINDOWSTATE_UNINITIALIZED;
 
@@ -862,7 +922,7 @@ void RenderDevice::RefreshWindow()
     videoSettings.windowState = WINDOWSTATE_ACTIVE;
 }
 
-void RenderDevice::GetWindowSize(int32 *width, int32 *height)
+void RSDK::RenderDevice::GetWindowSize(int32 *width, int32 *height)
 {
     int32 widest = 0, highest = 0, count = 0;
     GLFWmonitor **monitors = glfwGetMonitors(&count);
@@ -879,7 +939,7 @@ void RenderDevice::GetWindowSize(int32 *width, int32 *height)
         *height = highest;
 }
 
-void RenderDevice::SetupImageTexture(int32 width, int32 height, uint8 *imagePixels)
+void RSDK::RenderDevice::SetupImageTexture(int32 width, int32 height, uint8 *imagePixels)
 {
     if (imagePixels) {
         glBindTexture(GL_TEXTURE_2D, imageTexture);
@@ -887,8 +947,8 @@ void RenderDevice::SetupImageTexture(int32 width, int32 height, uint8 *imagePixe
     }
 }
 
-void RenderDevice::SetupVideoTexture_YUV420(int32 width, int32 height, uint8 *yPlane, uint8 *uPlane, uint8 *vPlane, int32 strideY, int32 strideU,
-                                            int32 strideV)
+void RSDK::RenderDevice::SetupVideoTexture_YUV420(int32 width, int32 height, uint8 *yPlane, uint8 *uPlane, uint8 *vPlane, int32 strideY,
+                                                  int32 strideU, int32 strideV)
 {
     uint32 *pixels = videoBuffer;
     uint32 *preY   = pixels;
@@ -932,8 +992,8 @@ void RenderDevice::SetupVideoTexture_YUV420(int32 width, int32 height, uint8 *yP
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, RETRO_VIDEO_TEXTURE_W, RETRO_VIDEO_TEXTURE_H, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, videoBuffer);
 }
 
-void RenderDevice::SetupVideoTexture_YUV422(int32 width, int32 height, uint8 *yPlane, uint8 *uPlane, uint8 *vPlane, int32 strideY, int32 strideU,
-                                            int32 strideV)
+void RSDK::RenderDevice::SetupVideoTexture_YUV422(int32 width, int32 height, uint8 *yPlane, uint8 *uPlane, uint8 *vPlane, int32 strideY,
+                                                  int32 strideU, int32 strideV)
 {
     uint32 *pixels = videoBuffer;
     uint32 *preY   = pixels;
@@ -977,8 +1037,8 @@ void RenderDevice::SetupVideoTexture_YUV422(int32 width, int32 height, uint8 *yP
     glBindTexture(GL_TEXTURE_2D, imageTexture);
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, RETRO_VIDEO_TEXTURE_W, RETRO_VIDEO_TEXTURE_H, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, videoBuffer);
 }
-void RenderDevice::SetupVideoTexture_YUV444(int32 width, int32 height, uint8 *yPlane, uint8 *uPlane, uint8 *vPlane, int32 strideY, int32 strideU,
-                                            int32 strideV)
+void RSDK::RenderDevice::SetupVideoTexture_YUV444(int32 width, int32 height, uint8 *yPlane, uint8 *uPlane, uint8 *vPlane, int32 strideY,
+                                                  int32 strideU, int32 strideV)
 {
     uint32 *pixels = videoBuffer;
     int32 pitch    = RETRO_VIDEO_TEXTURE_W - width;
@@ -1015,7 +1075,7 @@ void RenderDevice::SetupVideoTexture_YUV444(int32 width, int32 height, uint8 *yP
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, RETRO_VIDEO_TEXTURE_W, RETRO_VIDEO_TEXTURE_H, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, videoBuffer);
 }
 
-void RenderDevice::ProcessKeyEvent(GLFWwindow *, int32 key, int32 scancode, int32 action, int32 mods)
+void RSDK::RenderDevice::ProcessKeyEvent(GLFWwindow *, int32 key, int32 scancode, int32 action, int32 mods)
 {
     switch (action) {
         case GLFW_PRESS: {
@@ -1132,7 +1192,7 @@ void RenderDevice::ProcessKeyEvent(GLFWwindow *, int32 key, int32 scancode, int3
                         // Quick-Reload
 #if RETRO_USE_MOD_LOADER
                         if (mods & GLFW_MOD_CONTROL)
-                            RefreshModFolders();   
+                            RefreshModFolders();
 #endif
 
 #if RETRO_REV0U
@@ -1237,7 +1297,7 @@ void RenderDevice::ProcessKeyEvent(GLFWwindow *, int32 key, int32 scancode, int3
         }
     }
 }
-void RenderDevice::ProcessFocusEvent(GLFWwindow *, int32 focused)
+void RSDK::RenderDevice::ProcessFocusEvent(GLFWwindow *, int32 focused)
 {
     if (!focused) {
 #if RETRO_REV02
@@ -1250,7 +1310,7 @@ void RenderDevice::ProcessFocusEvent(GLFWwindow *, int32 focused)
 #endif
     }
 }
-void RenderDevice::ProcessMouseEvent(GLFWwindow *, int32 button, int32 action, int32 mods)
+void RSDK::RenderDevice::ProcessMouseEvent(GLFWwindow *, int32 button, int32 action, int32 mods)
 {
     switch (action) {
         case GLFW_PRESS: {
@@ -1290,7 +1350,7 @@ void RenderDevice::ProcessMouseEvent(GLFWwindow *, int32 button, int32 action, i
         }
     }
 }
-void RenderDevice::ProcessJoystickEvent(int32 ID, int32 event)
+void RSDK::RenderDevice::ProcessJoystickEvent(int32 ID, int32 event)
 {
 #if RETRO_INPUTDEVICE_GLFW
     if (!glfwJoystickIsGamepad(ID))
@@ -1306,7 +1366,7 @@ void RenderDevice::ProcessJoystickEvent(int32 ID, int32 event)
         RemoveInputDevice(InputDeviceFromID(hash));
 #endif
 }
-void RenderDevice::ProcessMaximizeEvent(GLFWwindow *, int32 maximized)
+void RSDK::RenderDevice::ProcessMaximizeEvent(GLFWwindow *, int32 maximized)
 {
     // i don't know why this is a thing
     if (maximized) {
@@ -1314,7 +1374,7 @@ void RenderDevice::ProcessMaximizeEvent(GLFWwindow *, int32 maximized)
     }
 }
 
-void RenderDevice::SetLinear(bool32 linear)
+void RSDK::RenderDevice::SetLinear(bool32 linear)
 {
     for (int32 i = 0; i < SCREEN_COUNT; ++i) {
         glBindTexture(GL_TEXTURE_2D, screenTextures[i]);
@@ -1322,3 +1382,974 @@ void RenderDevice::SetLinear(bool32 linear)
         glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, linear ? GL_LINEAR : GL_NEAREST);
     }
 }
+
+#if EXTRA_HW_RENDER
+
+#define VERTEX_LIMIT (0x4000) // absolute max i don't think i need more
+
+GLuint hwVAO;
+GLuint hwVBO;
+uint32 vboOff;
+GLuint hwIBO;
+uint32 iboOff;
+
+GLuint screenFB[SCREEN_COUNT];
+GLuint fbVBO;
+
+float *attributeBuf;
+GLuint layerTextures[LAYER_COUNT];
+GLuint attribTextures[LAYER_COUNT + 1]; // LAST IS USED FOR SPRITES AND OTHER THINGS THAT ONLY USE LINEBUF
+GLuint paletteTex;
+
+GLuint tFBT;
+GLuint tFB;
+
+uint16 quadIndices[VERTEX_LIMIT / 4 * 6];
+
+const RenderVertex fullVerts[] = {
+    { { -1.0, -1.0, 1.0 }, 0xFFFFFFFF, { 0.0, 0.0 } }, { { -1.0, +1.0, 1.0 }, 0xFFFFFFFF, { 0.0, 1.0 } },
+    { { +1.0, +1.0, 1.0 }, 0xFFFFFFFF, { 1.0, 1.0 } }, { { -1.0, -1.0, 1.0 }, 0xFFFFFFFF, { 0.0, 0.0 } },
+    { { +1.0, -1.0, 1.0 }, 0xFFFFFFFF, { 1.0, 0.0 } }, { { +1.0, +1.0, 1.0 }, 0xFFFFFFFF, { 1.0, 1.0 } },
+};
+
+RenderVertex tileVerts[] = {
+    { { -1.0, -1.0, 1.0 }, 0xFFFFFFFF, { 0.0, 0.0 } }, { { -1.0, +1.0, 1.0 }, 0xFFFFFFFF, { 0.0, 1.0 } },
+    { { +1.0, +1.0, 1.0 }, 0xFFFFFFFF, { 1.0, 1.0 } }, { { -1.0, -1.0, 1.0 }, 0xFFFFFFFF, { 0.0, 0.0 } },
+    { { +1.0, -1.0, 1.0 }, 0xFFFFFFFF, { 1.0, 0.0 } }, { { +1.0, +1.0, 1.0 }, 0xFFFFFFFF, { 1.0, 1.0 } },
+};
+
+RenderVertex placeVerts[] = {
+    { { -1.0, -1.0, 1.0 }, 0xFFFFFFFF, { 0.0, 0.0 } }, { { -1.0, +1.0, 1.0 }, 0xFFFFFFFF, { 0.0, 1.0 } },
+    { { +1.0, +1.0, 1.0 }, 0xFFFFFFFF, { 1.0, 1.0 } }, { { -1.0, -1.0, 1.0 }, 0xFFFFFFFF, { 0.0, 0.0 } },
+    { { +1.0, -1.0, 1.0 }, 0xFFFFFFFF, { 1.0, 0.0 } }, { { +1.0, +1.0, 1.0 }, 0xFFFFFFFF, { 1.0, 1.0 } },
+};
+
+void Shader::Use() { glUseProgram((GLuint)internal); };
+void Shader::SetUniformI(const char *name, int32 value) { glUniform1i(glGetUniformLocation((GLuint)internal, name), value); };
+void Shader::SetUniformI2(const char *name, int32 x, int32 y) { glUniform2i(glGetUniformLocation((GLuint)internal, name), x, y); };
+void Shader::SetUniformF(const char *name, float value) { glUniform1f(glGetUniformLocation((GLuint)internal, name), value); };
+void Shader::SetUniformF2(const char *name, float x, float y) { glUniform2f(glGetUniformLocation((GLuint)internal, name), x, y); };
+void Shader::SetTexture(const char *name, void *tex) { SetUniformI(name, (GLuint)tex); }
+
+Shader *RSDK::GetFBShader(int32 ink, float alpha)
+{
+    switch (ink) {
+        case INK_NONE: return (Shader *)new FBNoneShader(fbNoneShader);
+        case INK_BLEND: return (Shader *)new FBBlendShader(fbBlendShader);
+        case INK_ALPHA: {
+            auto shader   = new FBAlphaShader(fbAlphaShader);
+            shader->alpha = alpha;
+            return (Shader *)shader;
+        }
+        case INK_ADD: {
+            auto shader       = new FBAddShader(fbAddShader);
+            shader->intensity = alpha;
+            return (Shader *)shader;
+        }
+        case INK_SUB: {
+            auto shader       = new FBSubShader(fbSubShader);
+            shader->intensity = alpha;
+            return (Shader *)shader;
+        }
+        case INK_TINT: {
+            auto shader         = new FBTintShader(fbTintShader);
+            shader->lookupTable = tintLookupTable;
+            return (Shader *)shader;
+        }
+        case INK_MASKED: {
+            auto shader   = new FBMaskedShader(fbMaskedShader);
+            shader->color = maskColor;
+            return (Shader *)shader;
+        }
+        case INK_UNMASKED: {
+            auto shader   = new FBUnmaskedShader(fbUnmaskedShader);
+            shader->color = maskColor;
+            return (Shader *)shader;
+        }
+    }
+    return nullptr;
+}
+
+struct TileShader : public Shader {
+    uint16 palette[PALETTE_BANK_COUNT][PALETTE_BANK_SIZE];
+    uint8 layer;
+
+    void SetArgs()
+    {
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, gfxSurface[0].texture);
+        SetTexture("tileset", (void *)0);
+        glActiveTexture(GL_TEXTURE0 + 1);
+        glBindTexture(GL_TEXTURE_2D, paletteTex);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, PALETTE_BANK_SIZE, PALETTE_BANK_COUNT, GL_RGB, GL_UNSIGNED_SHORT_5_6_5, palette);
+        SetTexture("palette", (void *)1);
+        glActiveTexture(GL_TEXTURE20);
+        glBindTexture(GL_TEXTURE_2D, attribTextures[layer]);
+        SetTexture("attribs", (void *)20);
+        glActiveTexture(GL_TEXTURE10);
+        glBindTexture(GL_TEXTURE_2D, layerTextures[layer]);
+        SetTexture("tileLayout", (void *)10);
+        SetUniformF2("pixelSize", RSDK::RenderDevice::pixelSize.x, RSDK::RenderDevice::pixelSize.y);
+        SetUniformF2("layerSize", tileLayers[layer].xsize, tileLayers[layer].ysize);
+    }
+} tileDShader, tileHShader, tileVShader;
+
+struct FillShader : public Shader {
+    float aR, aG, aB;
+
+    void SetArgs() { glUniform3f(glGetUniformLocation((GLuint)internal, "alpha"), aR, aG, aB); }
+} fillShader;
+
+void RectShader::SetArgs() {}
+void CircleShader::SetArgs() { SetUniformF("radius", innerRadius); }
+
+void SpriteShader::SetArgs()
+{
+    SetUniformI("tex", 0);
+    glActiveTexture(GL_TEXTURE0 + 1);
+    glBindTexture(GL_TEXTURE_2D, paletteTex);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, PALETTE_BANK_SIZE, PALETTE_BANK_COUNT, GL_RGB, GL_UNSIGNED_SHORT_5_6_5, palette);
+    SetTexture("palette", (void *)1);
+
+    uint8 *lineBuffer = &gfxLineBuffer[currentScreen->clipBound_Y1];
+    float *attBuf     = attributeBuf - 1;
+
+    for (int32 cy = 0; cy < videoSettings.pixHeight; ++cy) {
+        ++attBuf;
+        ++attBuf;
+        *++attBuf = *lineBuffer;
+        ++attBuf;
+
+        if (cy >= currentScreen->clipBound_Y1 && cy < currentScreen->clipBound_Y2) {
+            ++lineBuffer;
+        }
+    }
+
+    glActiveTexture(GL_TEXTURE0 + 2);
+    glBindTexture(GL_TEXTURE_2D, attribTextures[LAYER_COUNT]);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 1, videoSettings.pixHeight, GL_RGBA, GL_FLOAT, attributeBuf);
+    SetTexture("attribs", (void *)2);
+
+    SetUniformF2("viewSize", RSDK::RenderDevice::viewSize.x, RSDK::RenderDevice::viewSize.y);
+}
+void DevTextShader::SetArgs() { SetUniformI("tex", 0); }
+
+void FBNoneShader::SetArgs()
+{
+    glBlendEquation(GL_FUNC_ADD);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); // since alpha's normally handled seperately, this lets stuff blend nicely including D layers
+}
+void FBBlendShader::SetArgs()
+{
+    glBlendEquation(GL_FUNC_ADD);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    SetUniformF("alpha", 0.5);
+}
+void FBAlphaShader::SetArgs()
+{
+    glBlendEquation(GL_FUNC_ADD);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    SetUniformF("alpha", alpha);
+}
+void FBAddShader::SetArgs()
+{
+    glBlendEquation(GL_FUNC_ADD);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+    SetUniformF("alpha", intensity);
+}
+void FBSubShader::SetArgs()
+{
+    glBlendEquation(GL_FUNC_SUBTRACT);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+    SetUniformF("alpha", intensity);
+}
+void FBTintShader::SetArgs() {}
+void FBMaskedShader::SetArgs() {}
+void FBUnmaskedShader::SetArgs() {}
+
+RectShader RSDK::rectShader;
+CircleShader RSDK::circleShader;
+
+DevTextShader RSDK::devTextShader;
+SpriteShader RSDK::spriteShader;
+
+FBNoneShader RSDK::fbNoneShader;
+FBBlendShader RSDK::fbBlendShader;
+FBAlphaShader RSDK::fbAlphaShader;
+FBAddShader RSDK::fbAddShader;
+FBSubShader RSDK::fbSubShader;
+FBTintShader RSDK::fbTintShader;
+FBMaskedShader RSDK::fbMaskedShader;
+FBUnmaskedShader RSDK::fbUnmaskedShader;
+
+RenderVertex *vertMap;
+uint16 *indexMap;
+
+RenderVertex *RSDK::AllocateVertexBuffer(uint32 count)
+{
+    assert((count <= VERTEX_LIMIT));
+    if ((vboOff + count) > (VERTEX_LIMIT + 6))
+        RSDK::RenderDevice::CopyFrameBuffer();
+    if (GLEW_ARB_buffer_storage) {
+        return vertMap + vboOff;
+    }
+    else {
+        RenderVertex *r = (RenderVertex *)glMapBufferRange(GL_ARRAY_BUFFER, (GLintptr)(vboOff * sizeof(RenderVertex)),
+                                                           (GLsizeiptr)(count * sizeof(RenderVertex)), GL_MAP_WRITE_BIT);
+        GLenum err      = glGetError();
+        return r;
+    }
+}
+uint16 *RSDK::AllocateIndexBuffer(uint32 count)
+{
+    assert((count <= VERTEX_LIMIT));
+    if ((iboOff + count) > VERTEX_LIMIT)
+        RSDK::RenderDevice::CopyFrameBuffer();
+    if (GLEW_ARB_buffer_storage) {
+        return indexMap + iboOff;
+    }
+    else {
+        uint16 *r  = (uint16 *)glMapBufferRange(GL_ELEMENT_ARRAY_BUFFER, (GLintptr)(iboOff * sizeof(uint16)), (GLsizeiptr)(count * sizeof(uint16)),
+                                               GL_MAP_WRITE_BIT);
+        GLenum err = glGetError();
+        return r;
+    }
+}
+
+void RSDK::AddQuadsToBuffer(uint16 *indexBuffer, uint32 count) { memcpy(indexBuffer, quadIndices, count * 6 * sizeof(uint16)); }
+
+void RSDK::SetupGFXSurface(GFXSurface *surface)
+{
+    glGenTextures(1, &surface->texture);
+    glBindTexture(GL_TEXTURE_2D, surface->texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 1 << surface->lineSize, surface->height, 0, GL_RED, GL_UNSIGNED_BYTE, surface->pixels);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_MIRRORED_REPEAT);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_MIRRORED_REPEAT);
+    glGenerateMipmap(GL_TEXTURE_2D);
+
+    if (GLEW_KHR_debug) {
+        uint32 gfx  = surface - gfxSurface;
+        char name[] = "gfxTex00";
+
+        name[sizeof(name) - 3] = '0' + (gfx / 10);
+        name[sizeof(name) - 2] = '0' + (gfx % 10);
+
+        glObjectLabel(GL_TEXTURE, surface->texture, sizeof(name), name);
+    }
+}
+
+void RSDK::RemoveGFXSurface(GFXSurface *surface) { glDeleteTextures(1, &surface->texture); }
+
+void RSDK::PopulateTilesTexture()
+{
+    GFXSurface *surface = &gfxSurface[0];
+
+    glBindTexture(GL_TEXTURE_2D, surface->texture);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, TILE_SIZE * FLIP_NONE, 0, TILE_SIZE, TILE_SIZE * TILE_COUNT, GL_RED, GL_UNSIGNED_BYTE,
+                    &tilesetPixels[TILESET_SIZE * FLIP_NONE]);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, TILE_SIZE * FLIP_X, 0, TILE_SIZE, TILE_SIZE * TILE_COUNT, GL_RED, GL_UNSIGNED_BYTE,
+                    &tilesetPixels[TILESET_SIZE * FLIP_X]);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, TILE_SIZE * FLIP_Y, 0, TILE_SIZE, TILE_SIZE * TILE_COUNT, GL_RED, GL_UNSIGNED_BYTE,
+                    &tilesetPixels[TILESET_SIZE * FLIP_Y]);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, TILE_SIZE * FLIP_XY, 0, TILE_SIZE, TILE_SIZE * TILE_COUNT, GL_RED, GL_UNSIGNED_BYTE,
+                    &tilesetPixels[TILESET_SIZE * FLIP_XY]);
+}
+
+void RebindVAP()
+{
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(RenderVertex), 0);
+    glVertexAttribPointer(1, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(RenderVertex), (void *)offsetof(RenderVertex, color));
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(RenderVertex), (void *)offsetof(RenderVertex, tex));
+}
+
+bool SetupHWRendering()
+{
+    GFXSurface *surface = &gfxSurface[0];
+
+    glGenTextures(1, &surface->texture);
+    glBindTexture(GL_TEXTURE_2D, surface->texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, TILE_SIZE * 4, TILE_SIZE * TILE_COUNT, 0, GL_RED, GL_UNSIGNED_BYTE, NULL);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_MIRRORED_REPEAT);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_MIRRORED_REPEAT);
+    glGenerateMipmap(GL_TEXTURE_2D);
+
+    if (GLEW_KHR_debug)
+        glObjectLabel(GL_TEXTURE, surface->texture, -1, "tileTex");
+    surface = &gfxSurface[1];
+
+    glGenTextures(1, &surface->texture);
+    glBindTexture(GL_TEXTURE_2D, surface->texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8UI, 1 << surface->lineSize, surface->height, 0, GL_RED_INTEGER, GL_UNSIGNED_BYTE, surface->pixels);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_MIRRORED_REPEAT);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_MIRRORED_REPEAT);
+
+    if (GLEW_KHR_debug)
+        glObjectLabel(GL_TEXTURE, surface->texture, -1, "devText");
+
+    int vID = 0;
+    for (int i = 0; i < (VERTEX_LIMIT / 4); i++) {
+        quadIndices[vID++] = (i << 2) + 0;
+        quadIndices[vID++] = (i << 2) + 1;
+        quadIndices[vID++] = (i << 2) + 2;
+        quadIndices[vID++] = (i << 2) + 1;
+        quadIndices[vID++] = (i << 2) + 3;
+        quadIndices[vID++] = (i << 2) + 2;
+    }
+
+    /*
+    for (int i = 0; i < TILE_COUNT; ++i) {
+        int o              = i * 4;
+        tileUVArray[o + 0] = 0.f;
+        tileUVArray[o + 1] = i / (float)TILE_COUNT;
+        tileUVArray[o + 2] = 1.f;
+        tileUVArray[o + 3] = (i + 1) / (float)TILE_COUNT;
+
+        // FLIP X
+        o += TILE_COUNT * 4;
+        tileUVArray[o + 0] = tileUVArray[i * 4 + 2];
+        tileUVArray[o + 1] = tileUVArray[i * 4 + 1];
+        tileUVArray[o + 2] = tileUVArray[i * 4 + 0];
+        tileUVArray[o + 3] = tileUVArray[i * 4 + 3];
+
+        // FLIP Y
+        o += TILE_COUNT * 4;
+        tileUVArray[o + 0] = tileUVArray[i * 4 + 0];
+        tileUVArray[o + 1] = tileUVArray[i * 4 + 3];
+        tileUVArray[o + 2] = tileUVArray[i * 4 + 2];
+        tileUVArray[o + 3] = tileUVArray[i * 4 + 1];
+
+        // FLIP XY
+        o += TILE_COUNT * 4;
+        tileUVArray[o + 0] = tileUVArray[i * 4 + 2];
+        tileUVArray[o + 1] = tileUVArray[i * 4 + 3];
+        tileUVArray[o + 2] = tileUVArray[i * 4 + 0];
+        tileUVArray[o + 3] = tileUVArray[i * 4 + 1];
+    } //*/
+    glGenVertexArrays(1, &hwVAO);
+    glBindVertexArray(hwVAO);
+    if (GLEW_KHR_debug)
+        glObjectLabel(GL_VERTEX_ARRAY, hwVAO, -1, "hwVAO");
+
+    RenderVertex vboBase[VERTEX_LIMIT + 6];
+
+    memcpy(vboBase, fullVerts, sizeof(fullVerts));
+
+    glGenBuffers(1, &hwVBO);
+    glBindBuffer(GL_ARRAY_BUFFER, hwVBO);
+    glGenBuffers(1, &hwIBO);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, hwIBO);
+    if (GLEW_KHR_debug)
+        glObjectLabel(GL_BUFFER, hwVBO, -1, "hwVBO");
+    if (GLEW_KHR_debug)
+        glObjectLabel(GL_BUFFER, hwIBO, -1, "hwIBO");
+
+    if (GLEW_ARB_buffer_storage) {
+        const int32 flags = GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT;
+        glBufferStorage(GL_ARRAY_BUFFER, sizeof(RenderVertex) * (VERTEX_LIMIT + 6), vboBase, flags);
+        glBufferStorage(GL_ELEMENT_ARRAY_BUFFER, sizeof(uint16) * VERTEX_LIMIT, NULL, flags);
+
+        vertMap  = (RenderVertex *)glMapBufferRange(GL_ARRAY_BUFFER, 0, sizeof(RenderVertex) * (VERTEX_LIMIT + 6), flags);
+        indexMap = (uint16 *)glMapBufferRange(GL_ELEMENT_ARRAY_BUFFER, 0, sizeof(uint16) * VERTEX_LIMIT, flags);
+    }
+    else {
+        glBufferData(GL_ARRAY_BUFFER, sizeof(RenderVertex) * (VERTEX_LIMIT + 6), vboBase, GL_DYNAMIC_DRAW);
+        uint16 iboBase[VERTEX_LIMIT];
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(uint16) * VERTEX_LIMIT, iboBase, GL_DYNAMIC_DRAW);
+    }
+
+    vboOff = 6;
+
+    RebindVAP();
+    glEnableVertexAttribArray(0);
+    glEnableVertexAttribArray(1);
+    glEnableVertexAttribArray(2);
+
+    attributeBuf = (float *)malloc(videoSettings.pixWidth * videoSettings.pixHeight * sizeof(float) * 4);
+
+    glGenTextures(LAYER_COUNT + 1, attribTextures);
+    glGenTextures(LAYER_COUNT, layerTextures);
+
+    if (GLEW_KHR_debug) {
+        char lname[] = "layerTex0";
+        char aname[] = "attrTex0";
+        for (int l = 0; l < LAYER_COUNT; ++l) {
+            lname[sizeof(lname) - 2] = '0' + l;
+            aname[sizeof(aname) - 2] = '0' + l;
+            glObjectLabel(GL_TEXTURE, layerTextures[l], sizeof(lname), lname);
+            glObjectLabel(GL_TEXTURE, attribTextures[l], sizeof(aname), aname);
+        }
+
+        glObjectLabel(GL_TEXTURE, attribTextures[LAYER_COUNT], -1, "gfxLineTex");
+    }
+
+    glGenTextures(1, &paletteTex);
+    glBindTexture(GL_TEXTURE_2D, paletteTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, PALETTE_BANK_SIZE, PALETTE_BANK_COUNT, 0, GL_RGB, GL_UNSIGNED_SHORT_5_6_5, NULL);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST); // this lets cool stuff happen at higher res
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    if (GLEW_KHR_debug) {
+        glObjectLabel(GL_TEXTURE, paletteTex, sizeof("paletteTex"), "paletteTex");
+    }
+
+    int32 height = pow(2, ceil(log(videoSettings.pixHeight) / log(2)));
+    glBindTexture(GL_TEXTURE_2D, attribTextures[LAYER_COUNT]);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, 1, height, 0, GL_RGBA, GL_FLOAT, NULL);
+
+    glGenFramebuffers(1, &tFB);
+    glGenTextures(1, &tFBT);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, tFB);
+    glBindTexture(GL_TEXTURE_2D, tFBT);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, RSDK::RenderDevice::textureSize.x, RSDK::RenderDevice::textureSize.y, 0, GL_RGBA, GL_FLOAT, NULL);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tFBT, 0);
+
+    if (GLEW_KHR_debug)
+        glObjectLabel(GL_TEXTURE, tFBT, sizeof("tFBT"), "tFBT");
+
+    glGenFramebuffers(SCREEN_COUNT, screenFB);
+    for (int32 i = 0; i < SCREEN_COUNT; ++i) {
+        glBindFramebuffer(GL_FRAMEBUFFER, screenFB[i]);
+        glBindTexture(GL_TEXTURE_2D, RSDK::RenderDevice::screenTextures[i]);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, RSDK::RenderDevice::screenTextures[i], 0);
+
+        if (GLEW_KHR_debug) {
+            char name[]            = "screenTex0";
+            name[sizeof(name) - 2] = '0' + i;
+            glObjectLabel(GL_TEXTURE, RSDK::RenderDevice::screenTextures[i], -1, name);
+        }
+    }
+
+#define _LOAD_SHADER(name, vert, frag)                                                                                                               \
+    name.internal = (void *)GL_LoadShader(vert, frag);                                                                                               \
+    if (GLEW_KHR_debug) {                                                                                                                            \
+        glObjectLabel(GL_PROGRAM, (GLuint)name.internal, -1, #name);                                                                                 \
+    }
+
+    _LOAD_SHADER(tileDShader, "Data/Shaders/OGL/HW/Passthrough.vs", "Data/Shaders/OGL/HW/Tiles/TilesDeform.fs");
+    _LOAD_SHADER(tileHShader, "Data/Shaders/OGL/HW/Passthrough.vs", "Data/Shaders/OGL/HW/Tiles/TilesH.fs");
+    _LOAD_SHADER(tileVShader, "Data/Shaders/OGL/HW/Passthrough.vs", "Data/Shaders/OGL/HW/Tiles/TilesV.fs");
+
+    _LOAD_SHADER(rectShader, "Data/Shaders/OGL/HW/Screensize.vs", "Data/Shaders/OGL/HW/Place/Color.fs");
+    _LOAD_SHADER(circleShader, "Data/Shaders/OGL/HW/Screensize.vs", "Data/Shaders/OGL/HW/Place/Circle.fs");
+
+    _LOAD_SHADER(devTextShader, "Data/Shaders/OGL/HW/Screensize.vs", "Data/Shaders/OGL/HW/Place/DevText.fs");
+    _LOAD_SHADER(spriteShader, "Data/Shaders/OGL/HW/Screensize.vs", "Data/Shaders/OGL/HW/Place/Sprite.fs");
+
+    _LOAD_SHADER(fbNoneShader, "Data/Shaders/OGL/HW/Passthrough.vs", "Data/Shaders/OGL/HW/FB/None.fs");
+    _LOAD_SHADER(fbBlendShader, "Data/Shaders/OGL/HW/Passthrough.vs", "Data/Shaders/OGL/HW/FB/Alpha.fs");
+    _LOAD_SHADER(fbAlphaShader, "Data/Shaders/OGL/HW/Passthrough.vs", "Data/Shaders/OGL/HW/FB/Alpha.fs");
+    _LOAD_SHADER(fbAddShader, "Data/Shaders/OGL/HW/Passthrough.vs", "Data/Shaders/OGL/HW/FB/Alpha.fs");
+    _LOAD_SHADER(fbSubShader, "Data/Shaders/OGL/HW/Passthrough.vs", "Data/Shaders/OGL/HW/FB/Alpha.fs");
+    _LOAD_SHADER(fbTintShader, "Data/Shaders/OGL/HW/Passthrough.vs", "Data/Shaders/OGL/HW/FB/Tint.fs");
+    _LOAD_SHADER(fbMaskedShader, "Data/Shaders/OGL/HW/Passthrough.vs", "Data/Shaders/OGL/HW/FB/Masked.fs");
+    _LOAD_SHADER(fbUnmaskedShader, "Data/Shaders/OGL/HW/Passthrough.vs", "Data/Shaders/OGL/HW/FB/Unmasked.fs");
+
+    _LOAD_SHADER(fillShader, "Data/Shaders/OGL/HW/Passthrough.vs", "Data/Shaders/OGL/HW/FB/Fill.fs");
+#undef _LOAD_SHADER
+
+    float x = 0.5 / (float)RSDK::RenderDevice::viewSize.x;
+    float y = 0.5 / (float)RSDK::RenderDevice::viewSize.y;
+
+    // ignore the last 6 verts, they're scaled to the 1024x512 textures already!
+    int32 vertCount = sizeof(placeVerts);
+    for (int32 v = 0; v < vertCount; ++v) {
+        RenderVertex *vertex = &placeVerts[v];
+        vertex->pos.x        = vertex->pos.x + x;
+        vertex->pos.y        = vertex->pos.y - y;
+
+        if (vertex->tex.x)
+            vertex->tex.x = screens[0].size.x * (1.0 / RSDK::RenderDevice::textureSize.x);
+
+        if (vertex->tex.y)
+            vertex->tex.y = screens[0].size.y * (1.0 / RSDK::RenderDevice::textureSize.y);
+    }
+
+    for (int32 v = 0; v < vertCount; ++v) {
+        RenderVertex *vertex = &tileVerts[v];
+
+        // vertex->tex.x /= (RSDK::RenderDevice::textureSize.x / scaling.x) / screens[0].size.x;
+        // vertex->tex.y /= (RSDK::RenderDevice::textureSize.y / scaling.y) / screens[0].size.y;
+    }
+
+    return true;
+}
+
+void PrepareHWPass() { glBindVertexArray(hwVAO); }
+
+void RSDK::PrepareLayerTextures()
+{
+    for (int l = 0; l < LAYER_COUNT; ++l) {
+        TileLayer *layer = &tileLayers[l];
+
+        if (!layer->xsize || !layer->ysize)
+            return;
+
+        glBindTexture(GL_TEXTURE_2D, layerTextures[l]);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R16UI, 1 << layer->widthShift, 1 << layer->heightShift, 0, GL_RED_INTEGER, GL_UNSIGNED_SHORT, NULL);
+        glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+        glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+
+        int32 width  = pow(2, ceil(log(videoSettings.pixWidth) / log(2)));
+        int32 height = pow(2, ceil(log(videoSettings.pixHeight) / log(2)));
+        glBindTexture(GL_TEXTURE_2D, attribTextures[l]);
+        glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+        switch (layer->type) {
+            case LAYER_BASIC:
+            case LAYER_HSCROLL: glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, 1, height, 0, GL_RGBA, GL_FLOAT, NULL); break;
+            case LAYER_VSCROLL: glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, width, 1, 0, GL_RGBA, GL_FLOAT, NULL); break;
+            default:
+            case LAYER_ROTOZOOM: glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, width, height, 0, GL_RGBA, GL_FLOAT, NULL); break;
+        }
+    }
+}
+
+void RSDK::DrawLayerHScroll(TileLayer *layer)
+{
+    if (!layer->xsize || !layer->ysize)
+        return;
+
+    ScanlineInfo *scanline = &scanlines[currentScreen->clipBound_Y1];
+    float *attBuf          = attributeBuf - 1;
+    uint8 *lineBuffer      = &gfxLineBuffer[currentScreen->clipBound_Y1];
+
+    for (int32 cy = 0; cy < videoSettings.pixHeight; ++cy) {
+        int32 posX = scanline->position.x;
+        int32 posY = scanline->position.y;
+
+        *++attBuf = posX / (float)(1UL << (20 + layer->widthShift));
+        *++attBuf = posY / (float)(1UL << (20 + layer->heightShift));
+        *++attBuf = *lineBuffer;
+        ++attBuf;
+
+        if (cy >= currentScreen->clipBound_Y1 && cy < currentScreen->clipBound_Y2) {
+            ++lineBuffer;
+            ++scanline;
+        }
+    }
+
+    int32 s            = screens - currentScreen;
+    RenderState *state = currentState + s;
+    TileShader *shader = new TileShader(tileHShader);
+    state->shader      = (Shader *)shader;
+    state->fbShader    = (Shader *)new FBNoneShader(fbNoneShader);
+    state->texture     = nullptr;
+
+    uint32 l = layer - tileLayers;
+    glBindTexture(GL_TEXTURE_2D, attribTextures[l]);
+    int32 height = pow(2, ceil(log(videoSettings.pixHeight) / log(2)));
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 1, videoSettings.pixHeight, GL_RGBA, GL_FLOAT, attributeBuf);
+
+    glBindTexture(GL_TEXTURE_2D, layerTextures[l]);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 1 << layer->widthShift, 1 << layer->heightShift, GL_RED_INTEGER, GL_UNSIGNED_SHORT, layer->layout);
+
+    memcpy(shader->palette, fullPalette, sizeof(fullPalette));
+    shader->layer = l;
+
+    state->vertexBuffer = AllocateVertexBuffer(4);
+    state->indexBuffer  = AllocateIndexBuffer(6);
+    state->vertexCount += 4;
+    state->indexCount += 6;
+    AddQuadsToBuffer(state->indexBuffer, 1);
+
+    state->vertexBuffer[0] = { { -1.0, -1.0, 1.0 }, 0xFFFFFF, { 0.0, 0.0 } };
+    state->vertexBuffer[1] = { { +1.0, -1.0, 1.0 }, 0xFFFFFF, { 1.0, 0.0 } };
+    state->vertexBuffer[2] = { { -1.0, +1.0, 1.0 }, 0xFFFFFF, { 0.0, 1.0 } };
+    state->vertexBuffer[3] = { { +1.0, +1.0, 1.0 }, 0xFFFFFF, { 1.0, 1.0 } };
+
+    PushCurrentState(s);
+}
+
+void RSDK::DrawLayerVScroll(TileLayer *layer)
+{
+    if (!layer->xsize || !layer->ysize)
+        return;
+
+    ScanlineInfo *scanline = &scanlines[currentScreen->clipBound_X1];
+    float *attBuf          = attributeBuf - 1;
+    uint8 *lineBuffer      = &gfxLineBuffer[0];
+
+    for (int32 cx = 0; cx < videoSettings.pixWidth; ++cx) {
+        int32 posX = scanline->position.x;
+        int32 posY = scanline->position.y;
+
+        *++attBuf = posX / (float)(1UL << (20 + layer->widthShift));
+        *++attBuf = posY / (float)(1UL << (20 + layer->heightShift));
+        *++attBuf = *lineBuffer;
+        ++attBuf;
+
+        if (cx >= currentScreen->clipBound_X1 && cx < currentScreen->clipBound_X2)
+            ++scanline;
+        if (cx < currentScreen->size.y)
+            ++lineBuffer;
+    }
+
+    int32 s            = screens - currentScreen;
+    RenderState *state = currentState + s;
+    TileShader *shader = new TileShader(tileVShader);
+    state->shader      = (Shader *)shader;
+    state->fbShader    = (Shader *)new FBNoneShader(fbNoneShader);
+    state->texture     = nullptr;
+
+    uint32 l = layer - tileLayers;
+    glBindTexture(GL_TEXTURE_2D, attribTextures[l]);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, videoSettings.pixWidth, 1, GL_RGBA, GL_FLOAT, attributeBuf);
+
+    glBindTexture(GL_TEXTURE_2D, layerTextures[l]);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 1 << layer->widthShift, 1 << layer->heightShift, GL_RED_INTEGER, GL_UNSIGNED_SHORT, layer->layout);
+
+    memcpy(shader->palette, fullPalette, sizeof(fullPalette));
+    shader->layer = l;
+
+    state->vertexBuffer = AllocateVertexBuffer(4);
+    state->indexBuffer  = AllocateIndexBuffer(6);
+    state->vertexCount += 4;
+    state->indexCount += 6;
+    AddQuadsToBuffer(state->indexBuffer, 1);
+
+    state->vertexBuffer[0] = { { -1.0, -1.0, 1.0 }, 0xFFFFFF, { 0.0, 0.0 } };
+    state->vertexBuffer[1] = { { +1.0, -1.0, 1.0 }, 0xFFFFFF, { 1.0, 0.0 } };
+    state->vertexBuffer[2] = { { -1.0, +1.0, 1.0 }, 0xFFFFFF, { 0.0, 1.0 } };
+    state->vertexBuffer[3] = { { +1.0, +1.0, 1.0 }, 0xFFFFFF, { 1.0, 1.0 } };
+
+    PushCurrentState(s);
+    // hehe
+    renderStates[s].last().clip_Y1 = 0;
+    renderStates[s].last().clip_Y2 = currentScreen->size.y;
+}
+
+void RSDK::DrawLayerRotozoom(TileLayer *layer)
+{
+    if (!layer->xsize || !layer->ysize)
+        return;
+
+    ScanlineInfo *scanline = &scanlines[currentScreen->clipBound_Y1];
+    float *attBuf          = attributeBuf - 1;
+    uint8 *lineBuffer      = &gfxLineBuffer[currentScreen->clipBound_Y1];
+
+    for (int32 cy = 0; cy < videoSettings.pixHeight; ++cy) {
+        int32 posX = scanline->position.x;
+        int32 posY = scanline->position.y;
+
+        for (int32 cx = 0; cx < videoSettings.pixWidth; ++cx) {
+            *++attBuf = posX / (float)(1UL << (20 + layer->widthShift));
+            *++attBuf = posY / (float)(1UL << (20 + layer->heightShift));
+            *++attBuf = *lineBuffer;
+            ++attBuf;
+
+            if (cx >= currentScreen->clipBound_X1 && cx < currentScreen->clipBound_X2) {
+                posX += scanline->deform.x;
+                posY += scanline->deform.y;
+            }
+        }
+
+        if (cy >= currentScreen->clipBound_Y1 && cy < currentScreen->clipBound_Y2) {
+            ++lineBuffer;
+            ++scanline;
+        }
+    }
+
+    int32 s            = screens - currentScreen;
+    RenderState *state = currentState + s;
+    TileShader *shader = new TileShader(tileDShader);
+    state->shader      = (Shader *)shader;
+    state->fbShader    = (Shader *)new FBNoneShader(fbNoneShader);
+    state->texture     = nullptr;
+
+    uint32 l = layer - tileLayers;
+    glBindTexture(GL_TEXTURE_2D, attribTextures[l]);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, videoSettings.pixWidth, videoSettings.pixHeight, GL_RGBA, GL_FLOAT, attributeBuf);
+
+    glBindTexture(GL_TEXTURE_2D, layerTextures[l]);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 1 << layer->widthShift, 1 << layer->heightShift, GL_RED_INTEGER, GL_UNSIGNED_SHORT, layer->layout);
+
+    memcpy(shader->palette, fullPalette, sizeof(fullPalette));
+    shader->layer = l;
+
+    state->vertexBuffer = AllocateVertexBuffer(4);
+    state->indexBuffer  = AllocateIndexBuffer(6);
+    state->vertexCount += 4;
+    state->indexCount += 6;
+    AddQuadsToBuffer(state->indexBuffer, 1);
+
+    state->vertexBuffer[0] = { { -1.0, -1.0, 1.0 }, 0xFFFFFF, { 0.0, 0.0 } };
+    state->vertexBuffer[1] = { { +1.0, -1.0, 1.0 }, 0xFFFFFF, { 1.0, 0.0 } };
+    state->vertexBuffer[2] = { { -1.0, +1.0, 1.0 }, 0xFFFFFF, { 0.0, 1.0 } };
+    state->vertexBuffer[3] = { { +1.0, +1.0, 1.0 }, 0xFFFFFF, { 1.0, 1.0 } };
+
+    PushCurrentState(s);
+}
+
+void RSDK::DrawLayerBasic(TileLayer *layer) { DrawLayerHScroll(layer); }
+
+void RSDK::FillScreen(uint32 color, int32 alphaR, int32 alphaG, int32 alphaB)
+{
+    int32 s            = screens - currentScreen;
+    RenderState *state = currentState + s;
+    state->shader      = (Shader *)new RectShader(rectShader);
+    auto fbShader      = new FillShader(fillShader);
+    fbShader->aR       = CLAMP(alphaR, 0, 0xFF) / 255.f;
+    fbShader->aG       = CLAMP(alphaG, 0, 0xFF) / 255.f;
+    fbShader->aB       = CLAMP(alphaB, 0, 0xFF) / 255.f;
+    state->fbShader    = (Shader *)fbShader;
+    state->texture     = nullptr;
+
+    state->indexBuffer  = AllocateIndexBuffer(6);
+    state->vertexBuffer = AllocateVertexBuffer(4);
+
+    state->vertexBuffer[0] = { { 0, 0, 1.0 }, color, { 0.0, 0.0 } };
+    state->vertexBuffer[1] = { { (float)currentScreen->pitch, 0, 1.0 }, color, { 1.0, 0.0 } };
+    state->vertexBuffer[2] = { { 0, (float)currentScreen->size.y, 1.0 }, color, { 0.0, 1.0 } };
+    state->vertexBuffer[3] = { { (float)currentScreen->pitch, (float)currentScreen->size.y, 1.0 }, color, { 1.0, 1.0 } };
+
+    state->vertexCount += 4;
+    state->indexCount += 6;
+    AddQuadsToBuffer(state->indexBuffer, 1);
+    PushCurrentState(s);
+}
+
+void RSDK::Draw3DScene(uint16 sceneID)
+{
+    if (sceneID >= SCENE3D_COUNT || true)
+        return;
+
+    RSDK::RenderDevice::CopyFrameBuffer();
+
+    Entity *entity = sceneInfo.entity;
+    Scene3D *scn   = &scene3DList[sceneID];
+
+    // Setup face buffer.
+    // Each face's depth is an average of the depth of its vertices.
+    Scene3DVertex *vertices = scn->vertices;
+    Scene3DFace *faceBuffer = scn->faceBuffer;
+    uint8 *faceVertCounts   = scn->faceVertCounts;
+
+    int32 vertIndex  = 0;
+    int32 indexCount = 0;
+    for (int32 i = 0; i < scn->faceCount; ++i) {
+        switch (*faceVertCounts) {
+            default:
+            case 1:
+                faceBuffer->depth = vertices[0].z;
+                vertices += *faceVertCounts;
+                break;
+
+            case 2:
+                faceBuffer->depth = vertices[0].z >> 1;
+                faceBuffer->depth += vertices[1].z >> 1;
+                vertices += 2;
+                break;
+
+            case 3:
+                faceBuffer->depth = vertices[0].z >> 1;
+                faceBuffer->depth = (faceBuffer->depth + (vertices[1].z >> 1)) >> 1;
+                faceBuffer->depth += vertices[2].z >> 1;
+                vertices += 3;
+                break;
+
+            case 4:
+                faceBuffer->depth = vertices[0].z >> 2;
+                faceBuffer->depth += vertices[1].z >> 2;
+                faceBuffer->depth += vertices[2].z >> 2;
+                faceBuffer->depth += vertices[3].z >> 2;
+                vertices += 4;
+                break;
+        }
+
+        faceBuffer->index = vertIndex;
+        vertIndex += *faceVertCounts;
+        indexCount += *faceVertCounts * 3 - 6;
+
+        ++faceBuffer;
+        ++faceVertCounts;
+    }
+
+    int32 s            = screens - currentScreen;
+    RenderState *state = currentState + s;
+    state->shader      = (Shader *)new RectShader(rectShader);
+    state->fbShader    = (Shader *)new FBNoneShader(fbNoneShader);
+    state->texture     = nullptr;
+
+    state->vertexBuffer = AllocateVertexBuffer(scn->vertexCount);
+    state->indexBuffer  = AllocateIndexBuffer(indexCount);
+
+    state->vertexCount = scn->vertexCount;
+    state->indexCount  = indexCount;
+
+    for (int32 v = 0; v < scn->vertexCount; ++v) {
+        RenderVertex *buf   = state->vertexBuffer + v;
+        Scene3DVertex *vert = scn->vertices + v;
+        // buf->pos.x          = (vert->x / 2.f) - (currentScreen->position.x);
+        // buf->pos.y          = (vert->y / 2.f) - (currentScreen->position.y);
+
+        buf->pos.x = FROM_FIXED_F((vert->x << 8) - (currentScreen->position.x << 16));
+        buf->pos.y = FROM_FIXED_F((vert->y << 8) - (currentScreen->position.y << 16));
+        buf->pos.z = 1.0;
+        buf->color = vert->color;
+    }
+
+    // Sort the face buffer. This is needed so that the faces don't overlap each other incorrectly when they're rendered.
+    // This is an insertion sort, taken from here:
+    // https://web.archive.org/web/20110108233032/http://rosettacode.org/wiki/Sorting_algorithms/Insertion_sort#C
+
+    Scene3DFace *a = scn->faceBuffer;
+
+    int i, j;
+    Scene3DFace temp;
+
+    for (i = 1; i < scn->faceCount; i++) {
+        temp = a[i];
+        j    = i - 1;
+        while (j >= 0 && a[j].depth < temp.depth) {
+            a[j + 1] = a[j];
+            j -= 1;
+        }
+        a[j + 1] = temp;
+    }
+
+    // Finally, display the faces.
+
+    uint8 *vertCnt = scn->faceVertCounts;
+    uint32 index   = 0;
+
+    switch (scn->drawMode) {
+        default: break;
+
+        case S3D_SOLIDCOLOR:
+        case S3D_SOLIDCOLOR_SHADED:
+        case S3D_SOLIDCOLOR_SHADED_BLENDED:
+            for (int32 f = 0; f < scn->faceCount; ++f) {
+                int32 faceIndex = scn->faceBuffer[f].index;
+                int32 start     = index;
+                for (int32 v = 0; v < *vertCnt; ++v) {
+                    if (v < *vertCnt - 2) {
+                        state->indexBuffer[index++] = v - 1 + faceIndex;
+                        state->indexBuffer[index++] = v + 1 + faceIndex;
+                        state->indexBuffer[index++] = v + 2 + faceIndex;
+                    }
+                }
+                state->indexBuffer[start] = faceIndex;
+                vertCnt++;
+            }
+            break; //*/
+    }
+
+    PushCurrentState(s);
+}
+
+void RSDK::PushCurrentState(int32 screen)
+{
+    // do optimizing later
+    RenderState *state = currentState + screen;
+
+    memcpy(&state->clip_X1, &screens[screen].clipBound_X1, sizeof(int32) * 4);
+    state->clip_X2 -= state->clip_X1;
+    state->clip_Y2 -= state->clip_Y1; // just make it easier on myself
+
+    renderStates[screen].push(*state);
+
+    vboOff += state->vertexCount;
+    iboOff += state->indexCount;
+    state->indexCount  = 0;
+    state->vertexCount = 0;
+
+    if (!GLEW_ARB_buffer_storage) {
+        glUnmapBuffer(GL_ARRAY_BUFFER);
+        glUnmapBuffer(GL_ELEMENT_ARRAY_BUFFER);
+    }
+
+    // SPECIAL CASE!!
+    if (state->fbShader == &fbTintShader) {
+        RSDK::RenderDevice::CopyFrameBuffer(); // do it instantly
+    }
+}
+
+void RSDK::RenderDevice::CopyFrameBuffer()
+{
+    // this should ALWAYS already be bound
+    // glBindVertexArray(hwVAO);
+    glBindFramebuffer(GL_FRAMEBUFFER, tFB);
+    glViewport(0, 0, videoSettings.pixWidth * scaling.x, videoSettings.pixHeight * scaling.y);
+    glClearColor(0, 0, 0, 0);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glEnable(GL_SCISSOR_TEST);
+    uint32 vOff = 6, iOff = 0;
+    for (int32 s = 0; s < videoSettings.screenCount; ++s) {
+        RenderState first{};
+        RenderState &last = first, current = renderStates[s].front();
+        bool firstState = true;
+
+        while (!renderStates[s].empty()) {
+            if (firstState)
+                firstState = false;
+            else
+                last = current;
+            current = renderStates[s].pop();
+
+            current.shader->Use();
+            current.shader->SetArgs();
+            current.shader->SetUniformF2("pixelSize", RSDK::RenderDevice::pixelSize.x, RSDK::RenderDevice::pixelSize.y);
+
+            if (current.texture) {
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, current.texture->texture);
+            }
+            glDisable(GL_BLEND);
+            glScissor(current.clip_X1 * scaling.x, current.clip_Y1 * scaling.y, current.clip_X2 * scaling.x, current.clip_Y2 * scaling.y);
+            glDrawElementsBaseVertex(GL_TRIANGLES, current.indexCount, GL_UNSIGNED_SHORT, (void *)(iOff * sizeof(uint16)), vOff);
+            vOff += current.vertexCount;
+            iOff += current.indexCount;
+
+            if (current.fbShader != fbNoneShader.internal || renderStates[s].empty()
+                || (renderStates[s].front().fbShader && renderStates[s].front().fbShader->internal != fbNoneShader.internal)) {
+                glBindFramebuffer(GL_FRAMEBUFFER, screenFB[s]);
+                glViewport(0, 0, RSDK::RenderDevice::textureSize.x, RSDK::RenderDevice::textureSize.y);
+                glEnable(GL_BLEND);
+                glDisable(GL_SCISSOR_TEST);
+                glActiveTexture(GL_TEXTURE1);
+                glBindTexture(GL_TEXTURE_2D, screenTextures[s]);
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, tFBT);
+                current.fbShader->Use();
+                current.fbShader->SetArgs();
+                current.fbShader->SetUniformI("tex", 0);
+                current.fbShader->SetUniformI("fb", 1);
+                glDrawArrays(GL_TRIANGLES, 0, 6);
+
+                delete current.shader;
+                delete current.fbShader;
+
+                glBindFramebuffer(GL_FRAMEBUFFER, tFB);
+                glViewport(0, 0, videoSettings.pixWidth * scaling.x, videoSettings.pixHeight * scaling.y);
+                glClearColor(0, 0, 0, 0);
+                glClear(GL_COLOR_BUFFER_BIT);
+                glEnable(GL_SCISSOR_TEST);
+            }
+        }
+        renderStates[s].finish();
+    }
+    vboOff = 6;
+    iboOff = 0;
+}
+#endif

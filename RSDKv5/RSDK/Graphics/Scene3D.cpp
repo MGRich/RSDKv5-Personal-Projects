@@ -823,6 +823,7 @@ void RSDK::AddMeshFrameToScene(uint16 modelFrames, uint16 sceneIndex, Animator *
     }
 }
 
+#if !EXTRA_HW_RENDER
 void RSDK::Draw3DScene(uint16 sceneID)
 {
     if (sceneID < SCENE3D_COUNT) {
@@ -1261,3 +1262,4 @@ void RSDK::Draw3DScene(uint16 sceneID)
         }
     }
 }
+#endif

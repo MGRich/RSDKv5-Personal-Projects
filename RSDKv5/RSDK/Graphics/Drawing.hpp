@@ -62,15 +62,6 @@ enum ShaderIDs {
     SHADER_RGB_IMAGE,
 };
 
-struct GFXSurface {
-    RETRO_HASH_MD5(hash);
-    uint8 *pixels;
-    int32 height;
-    int32 width;
-    int32 lineSize;
-    uint8 scope;
-};
-
 struct ScreenInfo {
     // uint16 *frameBuffer;
     uint16 frameBuffer[SCREEN_XMAX * SCREEN_YSIZE];
@@ -162,6 +153,7 @@ struct float4 {
     float w;
 };
 
+#if !EXTRA_HW_RENDER
 struct float3 {
     float x;
     float y;
@@ -178,6 +170,7 @@ struct RenderVertex {
     uint32 color;
     float2 tex;
 };
+#endif
 
 struct ShaderEntryBase {
     uint8 linear;
@@ -259,6 +252,19 @@ extern char drawGroupNames[0x10][0x10];
 
 extern uint16 blendLookupTable[0x20 * 0x100];
 extern uint16 subtractLookupTable[0x20 * 0x100];
+
+struct GFXSurface
+#if EXTRA_HW_RENDER
+    : public GFXSurfaceHW
+#endif
+{
+    RETRO_HASH_MD5(hash);
+    uint8 *pixels;
+    int32 height;
+    int32 width;
+    int32 lineSize;
+    uint8 scope;
+};
 
 extern GFXSurface gfxSurface[SURFACE_COUNT];
 
@@ -410,6 +416,9 @@ inline void ClearGfxSurfaces()
     // Unload sprite sheets
     for (int32 s = 0; s < SURFACE_COUNT; ++s) {
         if (gfxSurface[s].scope != SCOPE_GLOBAL) {
+#if EXTRA_HW_RENDER
+            RemoveGFXSurface(&gfxSurface[s]);            
+#endif
             MEM_ZERO(gfxSurface[s]);
             gfxSurface[s].scope = SCOPE_NONE;
         }
@@ -418,6 +427,11 @@ inline void ClearGfxSurfaces()
 
 #if RETRO_REV0U
 #include "Legacy/DrawingLegacy.hpp"
+#endif
+
+#if EXTRA_HW_RENDER
+extern RenderState currentState[SCREEN_COUNT];
+extern RenderStateQueue renderStates[SCREEN_COUNT];
 #endif
 
 } // namespace RSDK

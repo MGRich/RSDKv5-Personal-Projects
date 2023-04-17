@@ -533,6 +533,9 @@ extern "C" {
 #include "RSDK/Input/Input.hpp"
 #include "RSDK/Scene/Object.hpp"
 #include "RSDK/Graphics/Palette.hpp"
+#if EXTRA_HW_RENDER
+#include "RSDK/Graphics/Rendering.hpp"
+#endif
 #include "RSDK/Graphics/Drawing.hpp"
 #include "RSDK/Graphics/Scene3D.hpp"
 #include "RSDK/Scene/Scene.hpp"

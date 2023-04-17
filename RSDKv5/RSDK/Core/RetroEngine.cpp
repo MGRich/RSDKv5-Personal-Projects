@@ -36,6 +36,7 @@ int32 RSDK::RunRetroEngine(int32 argc, char *argv[])
         LoadSettingsINI();
 
 #if RETRO_USE_MOD_LOADER
+#if !EXTRA_HW_RENDER
         // do it early so we can render funny little loading bar for mods
         int32 shader = videoSettings.shaderID;
         strcpy(gameVerInfo.gameTitle, "RSDK" ENGINE_V_NAME);
@@ -48,6 +49,7 @@ int32 RSDK::RunRetroEngine(int32 argc, char *argv[])
             // No render device, throw a "QUIT" msg onto the message loop and call it a day :)
             SendQuitMsg();
         }
+#endif
 #if RETRO_PLATFORM == RETRO_ANDROID
         // wait until we have a window
         while (!RenderDevice::window) {
@@ -82,6 +84,8 @@ int32 RSDK::RunRetroEngine(int32 argc, char *argv[])
 #if RETRO_USE_MOD_LOADER
         // we confirmed the game actually is valid & running, lets start some callbacks
         RunModCallbacks(MODCB_ONGAMESTARTUP, NULL);
+#endif
+#if RETRO_USE_MOD_LOADER && !EXTRA_HW_RENDER
         videoSettings.shaderID = shader;
         RenderDevice::InitShaders();
         RenderDevice::SetWindowTitle();

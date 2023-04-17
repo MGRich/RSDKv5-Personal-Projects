@@ -829,7 +829,7 @@ void RSDK::ProcessObjectDrawLists()
                     if (engine.drawGroupVisible[l]) {
                         DrawList *list = &drawGroups[l];
                         for (int32 i = 0; i < list->entityCount; ++i) {
-                            Entity *entity     = &objectEntityList[list->entries[i]];
+                            Entity *entity = &objectEntityList[list->entries[i]];
 
                             if (entity->visible || (engine.showUpdateRanges & 2)) {
                                 switch (entity->active) {
@@ -838,7 +838,7 @@ void RSDK::ProcessObjectDrawLists()
                                     case ACTIVE_NEVER: break;
 
                                     case ACTIVE_ALWAYS:
-                                    case ACTIVE_NORMAL: 
+                                    case ACTIVE_NORMAL:
                                     case ACTIVE_PAUSED:
                                         DrawRectangle(entity->position.x, entity->position.y, TO_FIXED(1), TO_FIXED(1), 0x0000FF, 0xFF, INK_NONE,
                                                       false);
@@ -999,6 +999,10 @@ void RSDK::ProcessObjectDrawLists()
 
             currentScreen++;
             sceneInfo.currentScreenID++;
+#if EXTRA_HW_RENDER
+            // force the layers to draw
+            RenderDevice::CopyFrameBuffer();
+#endif
         }
     }
 }

@@ -313,12 +313,14 @@ void RSDK::ApplyModChanges()
 
 void DrawStatus(const char *str)
 {
+#if !EXTRA_HW_RENDER
     int32 dy = currentScreen->center.y - 32;
     DrawRectangle(currentScreen->center.x - 128, dy + 52, 0x100, 0x8, 0x80, 0xFF, INK_NONE, true);
     DrawDevString(str, currentScreen->center.x, dy + 52, ALIGN_CENTER, 0xFFFFFF);
 
     RenderDevice::CopyFrameBuffer();
     RenderDevice::FlipScreen();
+#endif
 }
 
 #if RETRO_RENDERDEVICE_EGL
@@ -350,8 +352,10 @@ bool32 RSDK::ScanModFolder(ModInfo *info, const char *targetFile, bool32 fromLoa
     }
 
     fs::path dataPath(modDir);
+#if !EXTRA_HW_RENDER
     int32 dy = currentScreen->center.y - 32;
     int32 dx = currentScreen->center.x;
+#endif
 
     if (targetFile) {
         if (fs::exists(fs::path(modDir + "/" + targetFileStr))) {
@@ -364,6 +368,7 @@ bool32 RSDK::ScanModFolder(ModInfo *info, const char *targetFile, bool32 fromLoa
 
     if (fs::exists(dataPath) && fs::is_directory(dataPath)) {
         try {
+#if !EXTRA_HW_RENDER
             if (loadingBar) {
                 currentScreen = &screens[0];
                 DrawRectangle(dx - 0x80 + 0x10, dy + 48, 0x100 - 0x20, 0x10, 0x000000, 0xFF, INK_NONE, true);
@@ -372,20 +377,22 @@ bool32 RSDK::ScanModFolder(ModInfo *info, const char *targetFile, bool32 fromLoa
                 RenderDevice::CopyFrameBuffer();
                 RenderDevice::FlipScreen();
             }
-
+#endif
             auto dirIterator = fs::recursive_directory_iterator(dataPath, fs::directory_options::follow_directory_symlink);
 
             std::vector<fs::directory_entry> files;
 
+#if !EXTRA_HW_RENDER
             int32 renders = 1;
             int32 size    = 0;
+#endif
 
             for (auto dirFile : dirIterator) {
 #if RETRO_PLATFORM != RETRO_ANDROID
                 if (!dirFile.is_directory()) {
 #endif
                     files.push_back(dirFile);
-
+#if !EXTRA_HW_RENDER
                     if (loadingBar && ++size >= RENDER_COUNT * renders) {
                         DrawRectangle(dx - 0x80 + 0x10, dy + 48, 0x100 - 0x20, 0x10, 0x000000, 0xFF, INK_NONE, true);
                         DrawDevString((std::to_string(size) + " files").c_str(), currentScreen->center.x, dy + 52, ALIGN_CENTER, 0xFFFFFF);
@@ -393,20 +400,23 @@ bool32 RSDK::ScanModFolder(ModInfo *info, const char *targetFile, bool32 fromLoa
                         RenderDevice::FlipScreen();
                         renders++;
                     }
+#endif
 #if RETRO_PLATFORM != RETRO_ANDROID
                 }
 #endif
             }
 
+#if !EXTRA_HW_RENDER
             int32 i    = 0;
             int32 bars = 1;
-
+#endif
             for (auto dirFile : files) {
                 std::string folderPath = dirFile.path().string().substr(dataPath.string().length() + 1);
                 std::transform(folderPath.begin(), folderPath.end(), folderPath.begin(),
                                [](unsigned char c) { return c == '\\' ? '/' : std::tolower(c); });
 
                 info->fileMap.insert(std::pair<std::string, std::string>(folderPath, dirFile.path().string()));
+#if !EXTRA_HW_RENDER
                 if (loadingBar && (size * bars) / BAR_THRESHOLD < ++i) {
                     DrawRectangle(dx - 0x80 + 0x10, dy + 48, 0x100 - 0x20, 0x10, 0x000000, 0xFF, INK_NONE, true);
                     DrawRectangle(dx - 0x80 + 0x10 + 2, dy + 50, (int32)((0x100 - 0x20 - 4) * (i / (float)size)), 0x10 - 4, 0x00FF00, 0xFF, INK_NONE,
@@ -416,19 +426,21 @@ bool32 RSDK::ScanModFolder(ModInfo *info, const char *targetFile, bool32 fromLoa
                     RenderDevice::CopyFrameBuffer();
                     RenderDevice::FlipScreen();
                 }
+#endif
             }
         } catch (fs::filesystem_error fe) {
             PrintLog(PRINT_ERROR, "Mod File Scanning Error: %s", fe.what());
         }
     }
 
+#if !EXTRA_HW_RENDER
     if (loadingBar && fromLoadMod) {
         DrawRectangle(dx - 0x80 + 0x10, dy + 48, 0x100 - 0x20, 0x10, 0x000080, 0xFF, INK_NONE, true);
 
         RenderDevice::CopyFrameBuffer();
         RenderDevice::FlipScreen();
     }
-
+#endif
     return true;
 }
 
@@ -566,11 +578,13 @@ void RSDK::LoadMods(bool newOnly, bool32 getVersion)
         }
     }
 
+#if !EXTRA_HW_RENDER
     int32 dy = currentScreen->center.y - 32;
     DrawRectangle(currentScreen->center.x - 128, dy, 0x100, 0x48, 0x80, 0xFF, INK_NONE, true);
     DrawDevString("Mod loading done!", currentScreen->center.x, dy + 28, ALIGN_CENTER, 0xFFFFFF);
     RenderDevice::CopyFrameBuffer();
     RenderDevice::FlipScreen();
+#endif
 
     LoadModSettings(); // implicit SortMods
 }
@@ -633,11 +647,13 @@ bool32 RSDK::LoadMod(ModInfo *info, std::string modsPath, std::string folder, bo
 
     FileIO *f = fOpen((modDir + "/mod.ini").c_str(), "r");
     if (f) {
+#if !EXTRA_HW_RENDER
         int32 dy = currentScreen->center.y - 32;
         DrawRectangle(currentScreen->center.x - 128, dy, 0x100, 0x48, 0x80, 0xFF, INK_NONE, true);
 
         DrawDevString("Loading mod", currentScreen->center.x, dy + 16, ALIGN_CENTER, 0xFFFFFF);
         DrawDevString((folder + "...").c_str(), currentScreen->center.x, dy + 28, ALIGN_CENTER, 0xFFFFFF);
+#endif
 
         DrawStatus("Parsing INI...");
 

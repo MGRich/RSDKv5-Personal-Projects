@@ -961,6 +961,10 @@ uint16 RSDK::LoadSpriteSheet(const char *filename, uint8 scope)
 #endif
         image.Close();
 
+#if EXTRA_HW_RENDER
+        SetupGFXSurface(surface);
+#endif
+
         return id;
     }
     else {

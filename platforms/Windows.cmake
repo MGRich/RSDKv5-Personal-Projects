@@ -78,6 +78,8 @@ elseif(RETRO_SUBSYSTEM STREQUAL "OGL")
         glew
         glfw
     )
+
+    target_compile_definitions(RetroEngine PRIVATE EXTRA_HW_RENDER=1)
 elseif(RETRO_SUBSYSTEM STREQUAL "VK")
     find_package(glfw3 CONFIG)
 

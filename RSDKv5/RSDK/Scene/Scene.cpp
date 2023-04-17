@@ -404,7 +404,8 @@ void RSDK::LoadSceneAssets()
 
             layer->layout = NULL;
             if (layer->xsize || layer->ysize) {
-                AllocateStorage((void **)&layer->layout, sizeof(uint16) * (1UL << layer->widthShift) * (1UL << layer->heightShift), DATASET_STG, true);
+                AllocateStorage((void **)&layer->layout, sizeof(uint16) * (1UL << layer->widthShift) * (1UL << layer->heightShift), DATASET_STG,
+                                true);
                 memset(layer->layout, 0xFF, sizeof(uint16) * (1UL << layer->widthShift) * (1UL << layer->heightShift));
             }
 
@@ -712,6 +713,10 @@ void RSDK::LoadSceneAssets()
 
         CloseFile(&info);
     }
+
+#if EXTRA_HW_RENDER
+    PrepareLayerTextures();
+#endif
 }
 void RSDK::LoadTileConfig(char *filepath)
 {
@@ -1012,10 +1017,15 @@ void RSDK::LoadStageGIF(char *filepath)
         tileset.palette = NULL;
         tileset.decoder = NULL;
 #endif
-        tileset.pixels  = NULL;
+        tileset.pixels = NULL;
+
+#if EXTRA_HW_RENDER
+        PopulateTilesTexture();
+#endif
     }
 }
 
+//#undef EXTRA_HW_RENDER
 void RSDK::ProcessParallaxAutoScroll()
 {
     for (int32 l = 0; l < LAYER_COUNT; ++l) {
@@ -1045,55 +1055,99 @@ void RSDK::ProcessParallax(TileLayer *layer)
             for (int32 i = 0; i < layer->scrollInfoCount; ++i) {
                 scrollInfo->tilePos = scrollInfo->scrollPos + (currentScreen->position.x * scrollInfo->parallaxFactor << 8);
 
+#if EXTRA_HW_RENDER
+                int32 tilePos = scrollInfo->tilePos % TO_FIXED(pixelWidth);
+                if (tilePos < 0)
+                    tilePos += TO_FIXED(pixelWidth);
+                scrollInfo->tilePos = tilePos;
+#else
                 int16 tilePos = FROM_FIXED(scrollInfo->tilePos) % pixelWidth;
                 if (tilePos < 0)
                     tilePos += pixelWidth;
                 scrollInfo->tilePos = TO_FIXED(tilePos);
+#endif
 
                 ++scrollInfo;
             }
 
+#if EXTRA_HW_RENDER
+            int32 scrollPos = ((layer->scrollPos + (layer->parallaxFactor * currentScreen->position.y << 8))) % TO_FIXED(pixelHeight);
+            if (scrollPos < 0)
+                scrollPos += TO_FIXED(pixelHeight);
+
+            uint8 *lineScrollPtr   = &layer->lineScroll[FROM_FIXED(scrollPos)];
+            int32 *deformationData = &layer->deformationData[(FROM_FIXED(scrollPos) + (uint16)layer->deformationOffset) & 0x1FF];
+#else
             int16 scrollPos =
                 FROM_FIXED((int32)((layer->scrollPos + (layer->parallaxFactor * currentScreen->position.y << 8)) & 0xFFFF0000)) % pixelHeight;
             if (scrollPos < 0)
                 scrollPos += pixelHeight;
 
             uint8 *lineScrollPtr = &layer->lineScroll[scrollPos];
+            int32 *deformationData = &layer->deformationData[(scrollPos + (uint16)layer->deformationOffset) & 0x1FF];
+#endif
 
             // Above water
-            int32 *deformationData = &layer->deformationData[(scrollPos + (uint16)layer->deformationOffset) & 0x1FF];
             for (int32 i = 0; i < currentScreen->waterDrawPos; ++i) {
                 scanline->position.x = layer->scrollInfo[*lineScrollPtr].tilePos;
                 if (layer->scrollInfo[*lineScrollPtr].deform)
                     scanline->position.x += TO_FIXED(*deformationData);
 
+#if EXTRA_HW_RENDER
+                scanline->position.y = scrollPos;
+                scrollPos += TO_FIXED(1);
+#else
                 scanline->position.y = TO_FIXED(scrollPos++);
+#endif
 
                 deformationData++;
+#if EXTRA_HW_RENDER
+                if (scrollPos >= TO_FIXED(pixelHeight)) {
+                    lineScrollPtr = layer->lineScroll;
+                    scrollPos -= TO_FIXED(pixelHeight);
+                }
+#else
                 if (scrollPos == pixelHeight) {
                     lineScrollPtr = layer->lineScroll;
-                    scrollPos     = 0;
+                    scrollPos = 0;
                 }
+#endif
                 else {
                     ++lineScrollPtr;
                 }
                 scanline++;
             }
 
-            // Under water
+#if EXTRA_HW_RENDER
+            deformationData = &layer->deformationDataW[(FROM_FIXED(scrollPos) + (uint16)layer->deformationOffsetW) & 0x1FF];
+#else
             deformationData = &layer->deformationDataW[(scrollPos + (uint16)layer->deformationOffsetW) & 0x1FF];
+#endif
+            // Under water
             for (int32 i = currentScreen->waterDrawPos; i < currentScreen->size.y; ++i) {
                 scanline->position.x = layer->scrollInfo[*lineScrollPtr].tilePos;
                 if (layer->scrollInfo[*lineScrollPtr].deform)
                     scanline->position.x += TO_FIXED(*deformationData);
 
+#if EXTRA_HW_RENDER
+                scanline->position.y = scrollPos;
+                scrollPos += TO_FIXED(1);
+#else
                 scanline->position.y = TO_FIXED(scrollPos++);
+#endif
 
                 deformationData++;
+#if EXTRA_HW_RENDER
+                if (scrollPos >= TO_FIXED(pixelHeight)) {
+                    lineScrollPtr = layer->lineScroll;
+                    scrollPos -= TO_FIXED(pixelHeight);
+                }
+#else
                 if (scrollPos == pixelHeight) {
                     lineScrollPtr = layer->lineScroll;
-                    scrollPos     = 0;
+                    scrollPos = 0;
                 }
+#endif
                 else {
                     ++lineScrollPtr;
                 }
@@ -1105,27 +1159,55 @@ void RSDK::ProcessParallax(TileLayer *layer)
         case LAYER_VSCROLL: {
             for (int32 i = 0; i < layer->scrollInfoCount; ++i) {
                 scrollInfo->tilePos = scrollInfo->scrollPos + (currentScreen->position.y * scrollInfo->parallaxFactor << 8);
-                scrollInfo->tilePos = TO_FIXED(FROM_FIXED(scrollInfo->tilePos) % pixelHeight);
 
+#if EXTRA_HW_RENDER
+                // tilePos stuff seems to be missing,,,
+                // we add it back here bc i said so?
+                int32 tilePos = scrollInfo->tilePos % TO_FIXED(pixelHeight);
+                if (tilePos < 0)
+                    tilePos += TO_FIXED(pixelHeight);
+                scrollInfo->tilePos = tilePos;
+#else
+                scrollInfo->tilePos = TO_FIXED(FROM_FIXED(scrollInfo->tilePos) % pixelHeight);
+#endif
                 ++scrollInfo;
             }
 
+#if EXTRA_HW_RENDER
+            int32 scrollPos = ((layer->scrollPos + (layer->parallaxFactor * currentScreen->position.x << 8))) % TO_FIXED(pixelWidth);
+            if (scrollPos < 0)
+                scrollPos += TO_FIXED(pixelWidth);
+
+            uint8 *lineScrollPtr = &layer->lineScroll[FROM_FIXED(scrollPos)];
+#else
             int16 scrollPos =
                 FROM_FIXED((int32)((layer->scrollPos + (layer->parallaxFactor * currentScreen->position.x << 8)) & 0xFFFF0000)) % pixelWidth;
             if (scrollPos < 0)
                 scrollPos += pixelWidth;
 
             uint8 *lineScrollPtr = &layer->lineScroll[scrollPos];
+#endif
 
             // Above water
             for (int32 i = 0; i < currentScreen->size.x; ++i) {
+#if EXTRA_HW_RENDER
+                scanline->position.x = scrollPos;
+                scrollPos += TO_FIXED(1);
+                scanline->position.y = layer->scrollInfo[*lineScrollPtr].tilePos;
+
+                if (scrollPos >= TO_FIXED(pixelWidth)) {
+                    lineScrollPtr = layer->lineScroll;
+                    scrollPos -= TO_FIXED(pixelWidth);
+                }
+#else
                 scanline->position.x = TO_FIXED(scrollPos++);
                 scanline->position.y = layer->scrollInfo[*lineScrollPtr].tilePos;
 
                 if (scrollPos == pixelWidth) {
                     lineScrollPtr = layer->lineScroll;
-                    scrollPos     = 0;
+                    scrollPos = 0;
                 }
+#endif
                 else {
                     ++lineScrollPtr;
                 }
@@ -1136,6 +1218,26 @@ void RSDK::ProcessParallax(TileLayer *layer)
         }
 
         case LAYER_ROTOZOOM: {
+#if EXTRA_HW_RENDER
+            int32 scrollPosX = (int32)((layer->scrollPos + (layer->parallaxFactor * currentScreen->position.x << 8))) % TO_FIXED(pixelWidth);
+            if (scrollPosX < 0)
+                scrollPosX += TO_FIXED(pixelWidth);
+
+            int32 scrollPosY = (int32)((layer->scrollPos + (layer->parallaxFactor * currentScreen->position.y << 8))) % TO_FIXED(pixelHeight);
+            if (scrollPosY < 0)
+                scrollPosY += TO_FIXED(pixelHeight);
+
+            for (int32 i = 0; i < currentScreen->size.y; ++i) {
+                scanline->position.x = scrollPosX;
+                scanline->position.y = scrollPosY;
+                scrollPosY += TO_FIXED(1);
+                scanline->deform.x = TO_FIXED(1);
+                scanline->deform.y = TO_FIXED(0);
+
+                scanline++;
+            }
+            break;
+#else
             int16 scrollPosX =
                 FROM_FIXED((int32)((layer->scrollPos + (layer->parallaxFactor * currentScreen->position.x << 8)) & 0xFFFF0000)) % pixelWidth;
             if (scrollPosX < 0)
@@ -1149,42 +1251,66 @@ void RSDK::ProcessParallax(TileLayer *layer)
             for (int32 i = 0; i < currentScreen->size.y; ++i) {
                 scanline->position.x = TO_FIXED(scrollPosX);
                 scanline->position.y = TO_FIXED(scrollPosY++);
-                scanline->deform.x   = TO_FIXED(1);
-                scanline->deform.y   = TO_FIXED(0);
+                scanline->deform.x = TO_FIXED(1);
+                scanline->deform.y = TO_FIXED(0);
 
                 scanline++;
             }
             break;
+#endif
         }
 
         case LAYER_BASIC: {
             for (int32 i = 0; i < layer->scrollInfoCount; ++i) {
                 scrollInfo->tilePos = scrollInfo->scrollPos + (currentScreen->position.x * scrollInfo->parallaxFactor << 8);
 
+#if EXTRA_HW_RENDER
+                int32 tilePos = scrollInfo->tilePos % TO_FIXED(pixelWidth);
+                if (tilePos < 0)
+                    tilePos += TO_FIXED(pixelWidth);
+                scrollInfo->tilePos = tilePos;
+#else
                 int16 tilePos = FROM_FIXED(scrollInfo->tilePos) % pixelWidth;
                 if (tilePos < 0)
                     tilePos += pixelWidth;
                 scrollInfo->tilePos = TO_FIXED(tilePos);
+#endif
 
                 ++scrollInfo;
             }
 
+#if EXTRA_HW_RENDER
+            int32 scrollPos = ((layer->scrollPos + (layer->parallaxFactor * currentScreen->position.y << 8))) % TO_FIXED(pixelHeight);
+            if (scrollPos < 0)
+                scrollPos += TO_FIXED(pixelHeight);
+
+            uint8 *lineScrollPtr = &layer->lineScroll[FROM_FIXED(scrollPos)];
+#else
             int16 scrollPos =
                 FROM_FIXED((int32)((layer->scrollPos + (layer->parallaxFactor * currentScreen->position.y << 8)) & 0xFFFF0000)) % pixelHeight;
             if (scrollPos < 0)
                 scrollPos += pixelHeight;
 
             uint8 *lineScrollPtr = &layer->lineScroll[scrollPos];
+#endif
 
             // Above water
             for (int32 i = 0; i < currentScreen->waterDrawPos; ++i) {
                 scanline->position.x = layer->scrollInfo[*lineScrollPtr].tilePos;
+#if EXTRA_HW_RENDER
+                scanline->position.y = scrollPos;
+                scrollPos += TO_FIXED(1);
+                if (scrollPos >= TO_FIXED(pixelHeight)) {
+                    lineScrollPtr = layer->lineScroll;
+                    scrollPos -= TO_FIXED(pixelHeight);
+                }
+#else
                 scanline->position.y = TO_FIXED(scrollPos++);
-
                 if (scrollPos == pixelHeight) {
                     lineScrollPtr = layer->lineScroll;
-                    scrollPos     = 0;
+                    scrollPos = 0;
                 }
+#endif
                 else {
                     ++lineScrollPtr;
                 }
@@ -1194,12 +1320,21 @@ void RSDK::ProcessParallax(TileLayer *layer)
             // Under water
             for (int32 i = currentScreen->waterDrawPos; i < currentScreen->size.y; ++i) {
                 scanline->position.x = layer->scrollInfo[*lineScrollPtr].tilePos;
+#if EXTRA_HW_RENDER
+                scanline->position.y = scrollPos;
+                scrollPos += TO_FIXED(1);
+                if (scrollPos >= TO_FIXED(pixelHeight)) {
+                    lineScrollPtr = layer->lineScroll;
+                    scrollPos -= TO_FIXED(pixelHeight);
+                }
+#else
                 scanline->position.y = TO_FIXED(scrollPos++);
-
                 if (scrollPos == pixelHeight) {
                     lineScrollPtr = layer->lineScroll;
-                    scrollPos     = 0;
+                    scrollPos = 0;
                 }
+#endif
+
                 else {
                     ++lineScrollPtr;
                 }
@@ -1210,6 +1345,7 @@ void RSDK::ProcessParallax(TileLayer *layer)
         }
     }
 }
+//#define  EXTRA_HW_RENDER (1)
 
 void RSDK::ProcessSceneTimer()
 {
@@ -1288,6 +1424,7 @@ void RSDK::CopyTileLayer(uint16 dstLayerID, int32 dstStartX, int32 dstStartY, ui
     }
 }
 
+#if !EXTRA_HW_RENDER
 void RSDK::DrawLayerHScroll(TileLayer *layer)
 {
     if (!layer->xsize || !layer->ysize)
@@ -2081,3 +2218,4 @@ void RSDK::DrawLayerBasic(TileLayer *layer)
         }
     }
 }
+#endif
